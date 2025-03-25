@@ -31,6 +31,8 @@ See `./cdb-check-py -h`
 
 - check if a user-defined compile option set is present in the CDB
 - filter compile units to check
+- remove specified path prefixes from the paths and and compile arguments
+  (e.g. project path, build folder or sysroot) to make configuration easier
 - configurable with config file and/or CLI arguments
   - CLI arguments are extending the configuration if present
     to create custom scenarios easily
@@ -38,8 +40,6 @@ See `./cdb-check-py -h`
 
 ## Planned features:
 
-- remove specified path prefixes from the paths and and compile arguments
-  (e.g. project path, build folder or sysroot)
 - advanced file filtering with globbing and/or regex
 - preset flag lists in configuration for different compilers
 - preset flag lists in configuration for different libraries
