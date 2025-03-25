@@ -79,7 +79,7 @@ def replace_path_prefix(val: str, working_dir: str, base_dirs: List[str]) -> str
     assert working_dir and PurePath(working_dir).is_absolute()
     assert '' not in base_dirs
     assert '/' not in base_dirs
-    assert all([PurePath(d).is_absolute() for d in base_dirs])
+    assert all(PurePath(d).is_absolute() for d in base_dirs)
 
     if not PurePath(val).is_absolute():
         val = str(PurePath(working_dir).joinpath(val))
@@ -168,7 +168,7 @@ def in_files(entry: CdbEntry, cu_files: List[str]) -> bool:
     TODO:
         - add simple globbing
     """
-    return any([entry.file.endswith(f) for f in cu_files])
+    return any(entry.file.endswith(f) for f in cu_files)
 
 
 def dump_entry(e: CdbEntry):
@@ -250,6 +250,9 @@ def process(cdb_file: str,
 
 
 def load_config(file: str) -> Dict[str, List[str]]:
+    """
+    Load config file to a dictionary.
+    """
     with open(file) as f:
         cfg = json.load(f)
         if not isinstance(cfg, dict):
@@ -257,20 +260,10 @@ def load_config(file: str) -> Dict[str, List[str]]:
         return cfg
 
 
-def merge_config(cfg_from_file: Dict[str, List[str]],
-                 cfg_from_args: argparse.Namespace) -> Dict[str, List[str]]:
-    cfg = copy.copy(cfg_from_file)
-    manual_args = {k: v for k, v in vars(cfg_from_args).items() if (
-        v is not None) and (k not in ['config', 'input', 'dump'])}
-    for k, v in manual_args.items():
-        if k in cfg.keys():
-            cfg[k] += v
-        else:
-            cfg[k] = v
-    return cfg
-
-
 def arg_parser() -> argparse.ArgumentParser:
+    """
+    Create CLI argument parser.
+    """
     parser = argparse.ArgumentParser()
     parser.add_argument('input', help='Compile DB file (compile_commands.json)')
     parser.add_argument('-c', '--config', help='Config file')
@@ -281,21 +274,42 @@ def arg_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def merge_config(cfg_from_file: Dict[str, List[str]],
+                 cfg_from_args: argparse.Namespace) -> Dict[str, List[str]]:
+    """
+    Merge config file and CLI arguments to a consistent config set.
+    """
+    cfg = copy.copy(cfg_from_file)
+    manual_args = {k: v for k, v in vars(cfg_from_args).items() if (
+        v is not None) and (k not in ['config', 'input', 'dump'])}
+    for k, v in manual_args.items():
+        if k in cfg.keys():
+            cfg[k] = list(set(cfg[k] + v))
+        elif v is not None:
+            cfg[k] = v
+    cfg.setdefault('compile_units', [])
+    cfg.setdefault('flags', [])
+    cfg.setdefault('base_dirs', [])
+    return cfg
+
+
+def configure(args: argparse.Namespace) -> Dict[str, List[str]]:
+    """
+    Create configuration by loading config file on demand and applying CLI args.
+    """
+    cfg = load_config(args.config) if args.config else {}
+    return merge_config(cfg, args)
+
+
 def main():
 
     args = arg_parser().parse_args()
-
-    if args.config:
-        cfg = load_config(args.config)
-    else:
-        cfg = {}
-
-    cfg = merge_config(cfg, args)
+    cfg = configure(args)
 
     if process(args.input,
-               cu_files=cfg.get('compile_units', []),
-               flags=cfg.get('flags', []),
-               base_dirs=cfg.get('base_dirs', []),
+               cu_files=cfg['compile_units'],
+               flags=cfg['flags'],
+               base_dirs=cfg['base_dirs'],
                dump=args.dump):
         print('OK')
     else:
@@ -434,3 +448,63 @@ def test_check_cdb():
 
     assert check_cdb(TEST_CDB, cu_files=[TEST_ENTRY_2.file], flags=['A1', 'A2'])
     assert not check_cdb(TEST_CDB, cu_files=[TEST_ENTRY_2.file], flags=['A1', 'A5'])
+
+
+def test_merge_config_defaults():
+
+    args = arg_parser().parse_args(['cc.json'])
+    cfg = merge_config({}, args)
+
+    assert cfg['compile_units'] == []
+    assert cfg['flags'] == []
+    assert cfg['base_dirs'] == []
+
+
+FILE_1 = 'file1'
+FILE_2 = 'file2'
+FLAG_1 = 'flag1'
+FLAG_2 = 'flag2'
+DIR_1 = 'dir1'
+DIR_2 = 'dir2'
+
+
+def test_merge_config_no_file():
+
+    args = arg_parser().parse_args(['cc.json', '-u', FILE_1, FILE_2, '-f', FLAG_1, FLAG_2, '-b', DIR_1, DIR_2])
+    cfg = merge_config({}, args)
+
+    assert cfg['compile_units'] == [FILE_1, FILE_2]
+    assert cfg['flags'] == [FLAG_1, FLAG_2]
+    assert cfg['base_dirs'] == [DIR_1, DIR_2]
+
+
+def test_merge_config_from_file():
+
+    CFG_FROM_FILE = {
+        'compile_units': [FILE_1, FILE_2],
+        'flags': [FLAG_1, FLAG_2],
+        'base_dirs': [DIR_1, DIR_2]
+    }
+
+    args = arg_parser().parse_args(['cc.json'])
+    cfg = merge_config(CFG_FROM_FILE, args)
+
+    assert cfg['compile_units'] == [FILE_1, FILE_2]
+    assert cfg['flags'] == [FLAG_1, FLAG_2]
+    assert cfg['base_dirs'] == [DIR_1, DIR_2]
+
+
+def test_merge_config_from_both():
+
+    CFG_FROM_FILE = {
+        'compile_units': [FILE_1],
+        'flags': [FLAG_1],
+        'base_dirs': [DIR_1]
+    }
+
+    args = arg_parser().parse_args(['cc.json', '-u', FILE_2, '-f', FLAG_1, FLAG_2, '-b', DIR_2])
+    cfg = merge_config(CFG_FROM_FILE, args)
+
+    assert all((v in cfg['compile_units']) for v in [FILE_1, FILE_2])
+    assert all((v in cfg['flags']) for v in [FLAG_1, FLAG_2])
+    assert all((v in cfg['base_dirs']) for v in [DIR_1, DIR_2])
