@@ -8,10 +8,11 @@ Usage: see `cdb_check.py -h` for details.
 
 from dataclasses import dataclass
 from pathlib import PurePath, Path
-from typing import List, Dict
+from typing import List, Dict, Union
 import argparse
 import copy
 import json
+import logging
 import sys
 
 
@@ -149,10 +150,12 @@ def check_flags(entry: CdbEntry, flags: List[str]) -> bool:
     TODO:
         - support MSVC arguments
     """
+    logger = logging.getLogger()
+    logger.debug(f'Checking {entry.file}')
     res = True
     for f in flags:
         if f'-{f}' not in entry.args:
-            print(f'{entry.file}: missing flag \'{f}\'', file=sys.stderr)
+            logger.warning(f'{entry.file}: missing flag \'{f}\'')
             res = False
     return res
 
@@ -202,11 +205,16 @@ def check_cdb(cdb: List[CdbEntry],
 
     all_ok = True
 
+    logger = logging.getLogger()
+
     if cu_files:
-        print('Filtered to files:')
-        print(', '.join(cu_files))
+        logger.debug('Filtered to files:')
+        logger.debug(', '.join(cu_files))
 
         cdb = [e for e in cdb if in_files(e, cu_files)]
+        logger.info(f'Checking {len(cdb)} matching entries(s) ...')
+    else:
+        logger.info(f'Checking {len(cdb)} entries(s) ...')
 
     for e in cdb:
         if dump:
@@ -240,14 +248,17 @@ def process(cdb_file: str,
         bool: True in case of check passed.
     """
 
-    print(f'Checking {cdb_file} ...')
+    logging.getLogger().debug(f'Checking {cdb_file} ...')
 
     cdb = load_cdb(cdb_file)
     cdb = [normalize(e, base_dirs=base_dirs) for e in cdb]
     return check_cdb(cdb, cu_files=cu_files, flags=flags, dump=dump)
 
 
-def load_config(file: str) -> Dict[str, List[str]]:
+Config = Dict[str, Union[bool, str, List[str]]]
+
+
+def load_config(file: str) -> Config:
     """
     Load config file to a dictionary.
     """
@@ -269,21 +280,24 @@ def arg_parser() -> argparse.ArgumentParser:
     parser.add_argument('-f', '--flags', nargs='+', help='Flags to check without \'-\' prefix')
     parser.add_argument('-b', '--base-dirs', nargs='+', help='Path prefixes to remove')
     parser.add_argument('-d', '--dump', action='store_true', help='Dump entries to check')
+    parser.add_argument('-v', '--verbose', action='store_true', help='Verbose logging')
     return parser
 
 
-def merge_config(cfg_from_file: Dict[str, List[str]],
-                 cfg_from_args: argparse.Namespace) -> Dict[str, List[str]]:
+def merge_config(cfg_from_file: Config,
+                 cfg_from_args: argparse.Namespace) -> Config:
     """
     Merge config file and CLI arguments to a consistent config set.
     """
     cfg = copy.copy(cfg_from_file)
-    manual_args = {k: v for k, v in vars(cfg_from_args).items() if (
-        v is not None) and (k not in ['config', 'input', 'dump'])}
-    for k, v in manual_args.items():
-        if k in cfg.keys():
+    cli_args = {k: v for k, v in vars(cfg_from_args).items() if (v is not None) and (k not in ['config', 'input'])}
+    for k, v in cli_args.items():
+        if isinstance(v, list) and k in cfg.keys():
             cfg[k] = list(set(cfg[k] + v))
-        elif v is not None:
+        elif isinstance(v, bool):
+            cfg.setdefault(k, False)
+            cfg[k] = cfg[k] or v
+        else:
             cfg[k] = v
     cfg.setdefault('compile_units', [])
     cfg.setdefault('flags', [])
@@ -291,7 +305,7 @@ def merge_config(cfg_from_file: Dict[str, List[str]],
     return cfg
 
 
-def configure(args: argparse.Namespace) -> Dict[str, List[str]]:
+def configure(args: argparse.Namespace) -> Config:
     """
     Create configuration by loading config file on demand and applying CLI args.
     """
@@ -299,21 +313,43 @@ def configure(args: argparse.Namespace) -> Dict[str, List[str]]:
     return merge_config(cfg, args)
 
 
+def configure_logging(verbose: bool):
+
+    logging.basicConfig(
+        format='[{levelname:.1}] {message}',
+        style='{',
+        level=logging.DEBUG,
+        stream=sys.stderr,
+    )
+
+    logger = logging.getLogger()
+    if verbose:
+        logger.setLevel(logging.DEBUG)
+    else:
+        logger.setLevel(logging.INFO)
+
+
 def main():
 
     args = arg_parser().parse_args()
     cfg = configure(args)
 
-    if args.dump:
-        print('Configuration:')
+    if cfg['dump']:
+        cfg['verbose'] = True
+
+    configure_logging(cfg['verbose'])
+    logger = logging.getLogger()
+
+    if cfg['dump']:
+        logger.debug('Configuration:')
         print(cfg)
 
     if process(args.input,
                cu_files=cfg['compile_units'],
                flags=cfg['flags'],
                base_dirs=cfg['base_dirs'],
-               dump=args.dump):
-        print('OK')
+               dump=cfg['dump']):
+        logger.info('OK')
     else:
         exit(1)
 
@@ -468,6 +504,7 @@ def test_merge_config_defaults():
     assert cfg['compile_units'] == []
     assert cfg['flags'] == []
     assert cfg['base_dirs'] == []
+    assert not cfg['verbose']
 
 
 FILE_1 = 'file1'
@@ -480,12 +517,13 @@ DIR_2 = 'dir2'
 
 def test_merge_config_no_file():
 
-    args = arg_parser().parse_args(['cc.json', '-u', FILE_1, FILE_2, '-f', FLAG_1, FLAG_2, '-b', DIR_1, DIR_2])
+    args = arg_parser().parse_args(['cc.json', '-u', FILE_1, FILE_2, '-f', FLAG_1, FLAG_2, '-b', DIR_1, DIR_2, '-v'])
     cfg = merge_config({}, args)
 
     assert cfg['compile_units'] == [FILE_1, FILE_2]
     assert cfg['flags'] == [FLAG_1, FLAG_2]
     assert cfg['base_dirs'] == [DIR_1, DIR_2]
+    assert cfg['verbose']
 
 
 def test_merge_config_from_file():
@@ -493,7 +531,8 @@ def test_merge_config_from_file():
     CFG_FROM_FILE = {
         'compile_units': [FILE_1, FILE_2],
         'flags': [FLAG_1, FLAG_2],
-        'base_dirs': [DIR_1, DIR_2]
+        'base_dirs': [DIR_1, DIR_2],
+        'verbose': True
     }
 
     args = arg_parser().parse_args(['cc.json'])
@@ -502,6 +541,7 @@ def test_merge_config_from_file():
     assert cfg['compile_units'] == [FILE_1, FILE_2]
     assert cfg['flags'] == [FLAG_1, FLAG_2]
     assert cfg['base_dirs'] == [DIR_1, DIR_2]
+    assert cfg['verbose']
 
 
 def test_merge_config_from_both():
@@ -509,12 +549,14 @@ def test_merge_config_from_both():
     CFG_FROM_FILE = {
         'compile_units': [FILE_1],
         'flags': [FLAG_1],
-        'base_dirs': [DIR_1]
+        'base_dirs': [DIR_1],
+        'verbose': False
     }
 
-    args = arg_parser().parse_args(['cc.json', '-u', FILE_2, '-f', FLAG_1, FLAG_2, '-b', DIR_2])
+    args = arg_parser().parse_args(['cc.json', '-u', FILE_2, '-f', FLAG_1, FLAG_2, '-b', DIR_2, '-v'])
     cfg = merge_config(CFG_FROM_FILE, args)
 
     assert all((v in cfg['compile_units']) for v in [FILE_1, FILE_2])
     assert all((v in cfg['flags']) for v in [FLAG_1, FLAG_2])
     assert all((v in cfg['base_dirs']) for v in [DIR_1, DIR_2])
+    assert cfg['verbose']
