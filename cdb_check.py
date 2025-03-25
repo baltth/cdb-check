@@ -306,6 +306,10 @@ def main():
     args = arg_parser().parse_args()
     cfg = configure(args)
 
+    if args.dump:
+        print('Configuration:')
+        print(cfg)
+
     if process(args.input,
                cu_files=cfg['compile_units'],
                flags=cfg['flags'],
