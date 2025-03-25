@@ -30,7 +30,7 @@ See `./cdb-check-py -h`
 # Features
 
 - check if a user-defined compile option set is present in the CDB
-- filter compile units to check
+- filter compile units to check, with support for simple wildcards
 - remove specified path prefixes from the paths and and compile arguments
   (e.g. project path, build folder or sysroot) to make configuration easier
 - configurable with config file and/or CLI arguments
@@ -40,7 +40,6 @@ See `./cdb-check-py -h`
 
 ## Planned features:
 
-- advanced file filtering with globbing and/or regex
 - preset flag lists in configuration for different compilers
 - preset flag lists in configuration for different libraries
   (determined by object file path, e.g. `CMakeFiles/target.dir` with _CMake_)

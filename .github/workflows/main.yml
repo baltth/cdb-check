@@ -25,4 +25,4 @@ jobs:
         run: |
           ./cdb_check.py -c test_data/config.json -d test_data/compile_commands.json
           ./cdb_check.py -c test_data/config.json test_data/compile_commands.json
-          ./cdb_check.py -c test_data/config.json -u file1.cpp file2.cpp -f pedantic -- test_data/compile_commands.json
+          ./cdb_check.py -c test_data/config.json -u 'src/*' file2.cpp -f pedantic -- test_data/compile_commands.json

@@ -160,15 +160,13 @@ def check_flags(entry: CdbEntry, flags: List[str]) -> bool:
 def in_files(entry: CdbEntry, cu_files: List[str]) -> bool:
     """
     Check if an entry is associated to a _whitelisted_ file.
-    The association is an 'ends with' match for now.
+    The association is checked with pathlib.match() thus
+    only non-recursive wildcard can be used.
 
     Returns:
         bool: True if the entry is whitelisted.
-
-    TODO:
-        - add simple globbing
     """
-    return any(entry.file.endswith(f) for f in cu_files)
+    return any(PurePath(entry.file).match(f) for f in cu_files)
 
 
 def dump_entry(e: CdbEntry):
@@ -430,6 +428,14 @@ def test_in_files():
 
     assert in_files(TEST_ENTRY, ['src/file.c'])
     assert in_files(TEST_ENTRY, ['src/file.c', 'src/file2.c'])
+
+    assert in_files(TEST_ENTRY, ['src/*'])
+    assert in_files(TEST_ENTRY, ['*/src/*'])
+    assert not in_files(TEST_ENTRY, ['src2/*'])
+
+    assert in_files(TEST_ENTRY, ['src/*.c'])
+    assert in_files(TEST_ENTRY, ['*.c'])
+    assert not in_files(TEST_ENTRY, ['*.cpp'])
 
 
 TEST_ENTRY_2 = CdbEntry(file='/path/to/src/file2.c',

@@ -6,12 +6,12 @@
   },
   {
     "directory": "/path/to/prj/build",
-    "command": "/usr/bin/c++ -DSOME_DEFINE=0 -I/path/to/prj/include -g -Wall -Wextra -pedantic --param=max-vartrack-size=0 -std=c++11 -o CMakeFiles/prj.dir/src/file2.cpp.o -c /path/to/prj/src/file2.cpp",
-    "file": "/path/to/prj/src/file2.cpp"
+    "command": "/usr/bin/c++ -DSOME_DEFINE=0 -I/path/to/prj/include -g -Wall -Wextra -pedantic --param=max-vartrack-size=0 -std=c++11 -o CMakeFiles/lib.dir/src/lib/file2.cpp.o -c /path/to/prj/src/lib/file2.cpp",
+    "file": "/path/to/prj/src/lib/file2.cpp"
   },
   {
     "directory": "/path/to/prj/build",
-    "command": "/usr/bin/c++ -DSOME_DEFINE=0 -I/path/to/prj/include -g -Wall -Wextra --param=max-vartrack-size=0 -std=c++11 -o CMakeFiles/prj.dir/src/file3.cpp.o -c /path/to/prj/src/file3.cpp",
-    "file": "/path/to/prj/src/file3.cpp"
+    "command": "/usr/bin/c++ -DSOME_DEFINE=0 -I/path/to/prj/include -g -Wall -Wextra --param=max-vartrack-size=0 -std=c++11 -o CMakeFiles/lib.dir/src/lib/file3.cpp.o -c /path/to/prj/src/lib/file3.cpp",
+    "file": "/path/to/prj/src/lib/file3.cpp"
   }
 ]
