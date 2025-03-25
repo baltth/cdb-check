@@ -28,19 +28,32 @@ class CdbEntry:
     """
     file: str
     compiler: str
-    args: List[str] = field(default_factory=list)
+    args: List[str]
+    out_file: str = ''
+
+
+OUT_FLAG = '-o'
 
 
 def to_entry(command: Dict[str, str]) -> CdbEntry:
     """
     Convert a dictionary loaded from a CDB to a CdbEntry.
-    Compiler and compile argument properties are split from the 'command' field.
+    Compiler, compile argument and object file properties are split from the 'command' field.
     """
     cmd = command['command'].split()
     assert len(cmd) >= 2
+
+    try:
+        ix = cmd.index(OUT_FLAG)
+        out_file = cmd[ix + 1]
+    except:
+        out_file = ''
+        assert False
+
     return CdbEntry(file=command['file'],
                     compiler=cmd[0],
-                    args=cmd[1:])
+                    args=cmd[1:],
+                    out_file=out_file)
 
 
 def load_cdb(file: str) -> List[CdbEntry]:
@@ -69,11 +82,12 @@ def normalize(entry: CdbEntry) -> CdbEntry:
             return args
 
     args = remove_with_value(entry.args, '-c')  # remove input argument
-    args = remove_with_value(args, '-o')  # remove object file argument
+    args = remove_with_value(args, OUT_FLAG)  # remove object file argument
 
     return CdbEntry(file=entry.file,
                     compiler=entry.compiler,
-                    args=args)
+                    args=args,
+                    out_file=entry.out_file)
 
 
 def check_flags(entry: CdbEntry, flags: List[str]) -> bool:
@@ -116,6 +130,8 @@ def dump_entry(e: CdbEntry):
     ARG_PREFIX = '    '
     print(e.file)
     print(f'  compiled with {e.compiler}')
+    if e.out_file:
+        print(f'  to file {e.out_file}')
     if e.args:
         print(f'  with args')
         print(ARG_PREFIX + ('\n' + ARG_PREFIX).join(e.args))
@@ -254,11 +270,13 @@ def test_to_entry():
     assert e.compiler == RAW_ENTRY['command'].split()[0]
     assert e.args[0] == '-DOPT_1=1'
     assert e.args[-1] == 'src/file.c'
+    assert e.out_file == 'out/file.c.o'
 
 
 TEST_ENTRY = CdbEntry(file='/path/to/src/file.c',
                       compiler='/path/to/compiler/gcc',
-                      args=['-A1', '-c', 'xxx', '-A2', '-o', 'yyy', '-I/path/to/src/include'])
+                      args=['-A1', '-c', 'xxx', '-A2', '-o', 'yyy', '-I/path/to/src/include'],
+                      out_file='/path/to/build/file.c.o')
 
 
 def test_normalize():
