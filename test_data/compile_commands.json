@@ -1,0 +1,22 @@
+[
+  {
+    "directory": "/path/to/project/prj/build",
+    "command": "/usr/bin/c++ -DLIB_DEFINE=1 -I/path/to/project/prj/include -g -Wall -Wextra -pedantic -std=c++11 -o CMakeFiles/lib.dir/src/lib/file1.cpp.o -c /path/to/project/prj/src/lib/file1.cpp",
+    "file": "/path/to/project/prj/src/lib/file1.cpp"
+  },
+  {
+    "directory": "/path/to/project/prj/build",
+    "command": "/usr/bin/c++ -DLIB_DEFINE=1 -I/path/to/project/prj/include -g -Wall -Wextra -pedantic -std=c++11 -o CMakeFiles/lib.dir/src/lib/file2.cpp.o -c /path/to/project/prj/src/lib/file2.cpp",
+    "file": "/path/to/project/prj/src/lib/file2.cpp"
+  },
+  {
+    "directory": "/path/to/project/prj/build",
+    "command": "/usr/bin/c++ -I/path/to/project/prj/include -g -Wall -Wextra -pedantic -std=c++11 -o CMakeFiles/prj.dir/src/file3.cpp.o -c /path/to/project/prj/src/file3.cpp",
+    "file": "/path/to/project/prj/src/file3.cpp"
+  },
+  {
+    "directory": "/path/to/project/prj/build",
+    "command": "/usr/bin/gcc -I/path/to/project/prj/include -g -Wall -Wextra -std=c11 -o CMakeFiles/prj.dir/src/file4.c.o -c /path/to/project/prj/src/file4.c",
+    "file": "/path/to/project/prj/src/file4.c"
+  }
+]
