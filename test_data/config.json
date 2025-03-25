@@ -1,4 +1,4 @@
 {
-  "flags": ["Wall", "Wextra", "std=c++11"],
-  "base_dirs": ["/path/to/prj"]
+  "base_dirs": ["/path/to/project/prj"],
+  "flags": ["Wall", "Wextra", "g", "I[...]/include"]
 }

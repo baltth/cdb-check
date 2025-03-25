@@ -38,6 +38,153 @@ See `./cdb-check-py -h`
     to create custom scenarios easily
 - dump the loaded and filtered CDB for debugging
 
+## How to use?
+
+Consider a project built with CMake like
+```
+prj
+|-include
+| +-...
++-src
+  |-lib
+  | |-file1.cpp   # in cmake target 'lib'
+  | +-file2.cpp   # in cmake target 'lib'
+  |-file3.cpp     # in cmake target 'prj'
+  +-file4.c       # in cmake target 'prj'
+```
+This will generate a compile DB like
+```json
+[
+  {
+    "directory": "/path/to/project/prj/build",
+    "command": "/usr/bin/c++ -DSOME_DEFINE=0 -I/path/to/project/prj/include -g -Wall -Wextra -pedantic -std=c++11 -o CMakeFiles/lib.dir/src/lib/file1.cpp.o -c /path/to/project/prj/src/lib/file1.cpp",
+    "file": "/path/to/project/prj/src/lib/file1.cpp"
+  },
+  {
+    "directory": "/path/to/project/prj/build",
+    "command": "/usr/bin/c++ -DSOME_DEFINE=0 -I/path/to/project/prj/include -g -Wall -Wextra -std=c++11 -o CMakeFiles/lib.dir/src/lib/file2.cpp.o -c /path/to/project/prj/src/lib/file2.cpp",
+    "file": "/path/to/project/prj/src/lib/file2.cpp"
+  },
+  {
+    "directory": "/path/to/project/prj/build",
+    "command": "/usr/bin/c++ -I/path/to/project/prj/include -g -Wall -Wextra -pedantic -std=c++11 -o CMakeFiles/prj.dir/src/file3.cpp.o -c /path/to/project/prj/src/file3.cpp",
+    "file": "/path/to/project/prj/src/file3.cpp"
+  },
+  {
+    "directory": "/path/to/project/prj/build",
+    "command": "/usr/bin/gcc -I/path/to/project/prj/include -g -Wall -Wextra -pedantic -std=c11 -o CMakeFiles/prj.dir/src/file4.c.o -c /path/to/project/prj/src/file4.c",
+    "file": "/path/to/project/prj/src/file4.c"
+  }
+]
+```
+
+Some common use cases for the tool:
+
+- Check if all _compiled files use_ `-Wall` and the proper include path:
+  ```sh
+  $ ./cdb_check.py test_data/compile_commands.json -f Wall I/path/to/project/prj/include
+
+  [I] Checking 4 entries(s) ...
+  [I] OK
+  ```
+  > Note that the leading `-` is removed from the flag arguments.
+
+- Now check if all files use `-pedantic`:
+  ```sh
+  $ ./cdb_check.py test_data/compile_commands.json -f pedantic
+
+  [I] Checking 4 entries(s) ...
+  [W] /path/to/project/prj/src/file4.c: missing flag 'pedantic'
+  ```
+  Oops... it failed, but this is the goal of the tool.
+  Let's take a closer look of this compilation!
+
+- _Dump the details_ of a file:
+  ```sh
+  $ ./cdb_check.py test_data/compile_commands.json -u /path/to/project/prj/src/file4.c -d
+
+  [D] Configuration:
+  {'compile_units': ['/path/to/project/prj/src/file4.c'], 'dump': True, 'verbose':  True, 'flags': [], 'base_dirs': []}
+  [D] Checking test_data/compile_commands.json ...
+  [D] Filtered to files:
+  [D] /path/to/project/prj/src/file4.c
+  [I] Checking 1 matching entries(s) ...
+  /path/to/project/prj/src/file4.c
+    compiled with /usr/bin/gcc
+    to file /path/to/project/prj/build/CMakeFiles/prj.dir/src/file4.c.o
+    with args
+      -I/path/to/project/prj/include
+      -g
+      -Wall
+      -Wextra
+      -std=c11
+  [I] OK
+  ```
+
+- _Simplify paths_ by removing the prefix project path to reduce noise:
+  ```sh
+  $ ./cdb_check.py test_data/compile_commands.json -b /path/to/project/prj -u file4.c -d
+
+  [D] Configuration:
+  {'compile_units': ['file4.c'], 'base_dirs': ['/path/to/project/prj'], 'dump': True,   'verbose': True, 'flags': []}
+  [D] Checking test_data/compile_commands.json ...
+  [D] Filtered to files:
+  [D] file4.c
+  [I] Checking 1 matching entries(s) ...
+  [...]/src/file4.c
+    compiled with /usr/bin/gcc
+    to file [...]/build/CMakeFiles/prj.dir/src/file4.c.o
+    with args
+      -I[...]/include
+      -g
+      -Wall
+      -Wextra
+      -std=c11
+  [I] OK
+  ```
+  This also applies to file arguments - the option `-u file2.cpp`
+  could be `-u src/lib/file2.cpp` but the full path won't work.
+  Similarly the flag arguments are simplified - to check the includes
+  use `-f I[...]/include`.
+
+- _Use wildcards_ for files to check:
+  ```sh
+  $ ./cdb_check.py test_data/compile_commands.json -b /path/to/project/prj -u '*.cpp' -f pedantic Wall Wextra
+
+  [I] Checking 3 matching entries(s) ...
+  [I] OK
+  ```
+
+- _Create a configuration_ to get rid of CLI options:
+  create a file `config.json` with contents
+  ```json
+  {
+    "base_dirs": ["/path/to/prj"],
+    "flags": ["Wall", "Wextra", "-g", "I[...]/include"]
+  }
+  ```
+  and use this on the CLI:
+  ```sh
+  $ ./cdb_check.py -c test_data/config.json test_data/compile_commands.json
+
+  [I] Checking 4 entries(s) ...
+  [I] OK
+  ```
+
+- _Use configurations_ as a baseline for _specialization_ - keep
+  common settings in config and apply specific options on CLI
+  ```sh
+  # Each command runs common checks and
+  # - check C++ standard
+  ./cdb_check.py -c test_data/config.json test_data/compile_commands.json -u '*.cpp' -f std=c++11
+  # - check C standard
+  ./cdb_check.py -c test_data/config.json test_data/compile_commands.json -u '*.c' -f std=c11
+  # - check for '-pedantic' and definitions in library
+  ./cdb_check.py -c test_data/config.json test_data/compile_commands.json -u 'src/lib/*' -f pedantic DSOME_DEFINE=0
+  ```
+
+> Note: all examples above can be run by the script `test_data/run_examples.sh`
+
 ## Planned features:
 
 - preset flag lists in configuration for different compilers

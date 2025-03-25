@@ -1,5 +1,0 @@
-{
-  "flags": ["Wall", "Wextra", "std=c++11"],
-  "base_dirs": ["/path/to/prj"],
-  "verbose": true
-}
