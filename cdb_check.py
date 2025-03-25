@@ -172,6 +172,21 @@ def in_files(entry: CdbEntry, cu_files: List[str]) -> bool:
     return any(PurePath(entry.file).match(f) for f in cu_files)
 
 
+def in_libraries(entry: CdbEntry, libraries: List[str]) -> bool:
+    """
+    Check if an entry is associated to a _whitelisted_ library.
+    The association is defined by the output file path of the
+    compilation.
+
+    Returns:
+        bool: True if the entry is matching a whitelisted library.
+    """
+    def match(lib: str) -> bool:
+        l = lib.removeprefix('/').removesuffix('/')
+        return (f'/{l}/' in entry.out_file) or (f'CMakeFiles/{lib}.dir' in entry.out_file)
+    return any(match(l) for l in libraries)
+
+
 def dump_entry(e: CdbEntry):
     """
     Dump a single CdbEntry to stdout.
@@ -188,6 +203,7 @@ def dump_entry(e: CdbEntry):
 
 def check_cdb(cdb: List[CdbEntry],
               cu_files: List[str] = [],
+              libraries: List[str] = [],
               flags: List[str] = [],
               dump: bool = False) -> bool:
     """
@@ -196,6 +212,7 @@ def check_cdb(cdb: List[CdbEntry],
     Args:
         cdb: List of normalized CDB entries
         cu_files: List of files to check, defaults to check all.
+        libraries: List of libraries to check, defaults to check all.
         flags: Compile flags to check
         dump: Dump the entries included in the check and return success
 
@@ -207,14 +224,22 @@ def check_cdb(cdb: List[CdbEntry],
 
     logger = logging.getLogger()
 
+    filtered = False
+    if libraries:
+        filtered = True
+        logger.debug('Filtered to libraries:')
+        logger.debug(', '.join(libraries))
+        cdb = [e for e in cdb if in_libraries(e, libraries)]
+
     if cu_files:
+        filtered = True
         logger.debug('Filtered to files:')
         logger.debug(', '.join(cu_files))
 
         cdb = [e for e in cdb if in_files(e, cu_files)]
-        logger.info(f'Checking {len(cdb)} matching entries(s) ...')
-    else:
-        logger.info(f'Checking {len(cdb)} entries(s) ...')
+
+    qualifier = ' matching' if filtered else ''
+    logger.info(f'Checking {len(cdb)}{qualifier} entries(s) ...')
 
     for e in cdb:
         if dump:
@@ -228,6 +253,7 @@ def check_cdb(cdb: List[CdbEntry],
 
 def process(cdb_file: str,
             cu_files: List[str] = [],
+            libraries: List[str] = [],
             flags: List[str] = [],
             base_dirs: List[str] = [],
             dump: bool = False) -> bool:
@@ -240,6 +266,7 @@ def process(cdb_file: str,
     Args:
         cdb_file: Name of CDB file to load
         cu_files: List of files to check, defaults to check all.
+        libraries: List of libraries to check, defaults to check all.
         flags: Compile flags to check
         base_dirs: List of path prefixes to drop
         dump: Dump the entries included in the check and return success
@@ -252,7 +279,11 @@ def process(cdb_file: str,
 
     cdb = load_cdb(cdb_file)
     cdb = [normalize(e, base_dirs=base_dirs) for e in cdb]
-    return check_cdb(cdb, cu_files=cu_files, flags=flags, dump=dump)
+    return check_cdb(cdb,
+                     cu_files=cu_files,
+                     libraries=libraries,
+                     flags=flags,
+                     dump=dump)
 
 
 Config = Dict[str, Union[bool, str, List[str]]]
@@ -276,11 +307,26 @@ def arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     parser.add_argument('input', help='Compile DB file (compile_commands.json)')
     parser.add_argument('-c', '--config', help='Config file')
+    parser.add_argument('-f', '--flags', nargs='+', help='Flags to check, passed without \'-\' prefix')
     parser.add_argument('-u', '--compile-units', nargs='+', help='Compile units to check, default: all')
-    parser.add_argument('-f', '--flags', nargs='+', help='Flags to check without \'-\' prefix')
-    parser.add_argument('-b', '--base-dirs', nargs='+', help='Path prefixes to remove')
+    parser.add_argument('-l',
+                        '--libraries',
+                        nargs='+',
+                        help='Logical \'libraries\' to check, default: all')
+    parser.add_argument('-b', '--base-dirs', nargs='+',
+                        help='Path prefixes to remove, either absolute or relative to $PWD')
     parser.add_argument('-d', '--dump', action='store_true', help='Dump entries to check')
     parser.add_argument('-v', '--verbose', action='store_true', help='Verbose logging')
+    parser.epilog = """
+Notes about --libraries option:
+
+Technically a libraries are associated by the output file path
+(e.g. `build/CMakeFiles/lib.dir/file.c.o). A library contains all entries
+whose output file contains the 'library_name' or 'CMakeFiles/library_name.dir' as parent.
+Filtering by libraries is not equivalent to filtering by files - a file may be compiled
+multiple times to different libraries with different setup.
+"""
+
     return parser
 
 
@@ -299,9 +345,10 @@ def merge_config(cfg_from_file: Config,
             cfg[k] = cfg[k] or v
         else:
             cfg[k] = v
-    cfg.setdefault('compile_units', [])
     cfg.setdefault('flags', [])
     cfg.setdefault('base_dirs', [])
+    cfg.setdefault('libraries', [])
+    cfg.setdefault('compile_units', [])
     return cfg
 
 
@@ -346,6 +393,7 @@ def main():
 
     if process(args.input,
                cu_files=cfg['compile_units'],
+               libraries=cfg['libraries'],
                flags=cfg['flags'],
                base_dirs=cfg['base_dirs'],
                dump=cfg['dump']):
@@ -413,7 +461,7 @@ TEST_ENTRY = CdbEntry(file='/path/to/src/file.c',
                           '-Irelative/include',
                           '-I/path/to/src/include',
                       ],
-                      out_file='/path/to/build/file.c.o')
+                      out_file='/path/to/build/CMakeFiles/lib.dir/src/file.c.o')
 
 
 def test_normalize_drop_args():
@@ -474,15 +522,27 @@ def test_in_files():
     assert not in_files(TEST_ENTRY, ['*.cpp'])
 
 
+def test_in_libraries():
+
+    assert not in_libraries(TEST_ENTRY, [])
+    assert not in_libraries(TEST_ENTRY, ['some-lib-name'])
+
+    assert in_libraries(TEST_ENTRY, ['lib'])
+    assert in_libraries(TEST_ENTRY, ['src'])
+    assert in_libraries(TEST_ENTRY, ['lib', 'some-other-lib'])
+
+
 TEST_ENTRY_2 = CdbEntry(file='/path/to/src/file2.c',
                         directory='/path/to/build',
                         compiler='/path/to/compiler/gcc',
-                        args=['-A1', '-c', 'xxx', '-A2', '-o', 'yyy', '-I/path/to/src/include'])
+                        args=['-A1', '-c', 'xxx', '-A2', '-o', 'yyy', '-I/path/to/src/include'],
+                        out_file='/path/to/build/CMakeFiles/lib.dir/src/file2.c.o')
 
 TEST_ENTRY_3 = CdbEntry(file='/path/to/src/file3.c',
                         directory='/path/to/build',
                         compiler='/path/to/compiler/gcc',
-                        args=['-A1', '-c', 'xxx', '-A3', '-o', 'yyy', '-I/path/to/src/include'])
+                        args=['-A1', '-c', 'xxx', '-A3', '-o', 'yyy', '-I/path/to/src/include'],
+                        out_file='/path/to/build/CMakeFiles/lib2.dir/src/file3.c.o')
 
 TEST_CDB = [TEST_ENTRY, TEST_ENTRY_2, TEST_ENTRY_3]
 
@@ -494,6 +554,8 @@ def test_check_cdb():
 
     assert check_cdb(TEST_CDB, cu_files=[TEST_ENTRY_2.file], flags=['A1', 'A2'])
     assert not check_cdb(TEST_CDB, cu_files=[TEST_ENTRY_2.file], flags=['A1', 'A5'])
+
+    assert check_cdb(TEST_CDB, libraries=['lib'], flags=['A1', 'A2'])
 
 
 def test_merge_config_defaults():
