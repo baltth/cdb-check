@@ -80,11 +80,13 @@ This will generate a compile DB like
 ]
 ```
 
-Some common use cases for the tool:
+Let's assume this file is at `test_data/cdb.json`. Some common use cases for the tool:
+
+> Note: all examples below can be run by the script `test_data/run_examples.sh`
 
 - Check if all _compiled files use_ `-Wall` and the proper include path:
   ```sh
-  $ ./cdb_check.py test_data/compile_commands.json -f Wall I/path/to/project/prj/include
+  $ ./cdb_check.py test_data/cdb.json -f Wall I/path/to/project/prj/include
 
   [I] Checking 4 entries(s) ...
   [I] OK
@@ -93,7 +95,7 @@ Some common use cases for the tool:
 
 - Now check if all files use `-pedantic`:
   ```sh
-  $ ./cdb_check.py test_data/compile_commands.json -f pedantic
+  $ ./cdb_check.py test_data/cdb.json -f pedantic
 
   [I] Checking 4 entries(s) ...
   [W] /path/to/project/prj/src/file4.c: missing flag 'pedantic'
@@ -103,11 +105,11 @@ Some common use cases for the tool:
 
 - _Dump the details_ of a file:
   ```sh
-  $ ./cdb_check.py test_data/compile_commands.json -u /path/to/project/prj/src/file4.c -d
+  $ ./cdb_check.py test_data/cdb.json -u /path/to/project/prj/src/file4.c -d
 
   [D] Configuration:
-  {'compile_units': ['/path/to/project/prj/src/file4.c'], 'dump': True, 'verbose':  True, 'flags': [], 'base_dirs': []}
-  [D] Checking test_data/compile_commands.json ...
+  {'base_dirs': [], 'libraries': [], 'compile_units': ['/path/to/project/prj/src/file4.c'], 'flags': [], 'verbose': False, 'flags_by_compiler': {}, 'extra': {'input': 'test_data/cdb.json', 'dump': True}}
+  [D] Checking test_data/cdb.json ...
   [D] Filtered to files:
   [D] /path/to/project/prj/src/file4.c
   [I] Checking 1 matching entries(s) ...
@@ -125,11 +127,11 @@ Some common use cases for the tool:
 
 - _Simplify paths_ by removing the prefix project path to reduce noise:
   ```sh
-  $ ./cdb_check.py test_data/compile_commands.json -b /path/to/project/prj -u file4.c -d
+  $ ./cdb_check.py test_data/cdb.json -b /path/to/project/prj -u file4.c -d
 
   [D] Configuration:
-  {'compile_units': ['file4.c'], 'base_dirs': ['/path/to/project/prj'], 'dump': True,   'verbose': True, 'flags': []}
-  [D] Checking test_data/compile_commands.json ...
+  {'base_dirs': ['/path/to/project/prj'], 'libraries': [], 'compile_units': ['file4.c'], 'flags': [], 'verbose': False, 'flags_by_compiler': {}, 'extra': {'input': 'test_data/cdb.json', 'dump': True}}
+  [D] Checking test_data/cdb.json ...
   [D] Filtered to files:
   [D] file4.c
   [I] Checking 1 matching entries(s) ...
@@ -151,7 +153,7 @@ Some common use cases for the tool:
 
 - _Use wildcards_ for files to check:
   ```sh
-  $ ./cdb_check.py test_data/compile_commands.json -b /path/to/project/prj -u '*.cpp' -f pedantic Wall Wextra
+  $ ./cdb_check.py test_data/cdb.json -b /path/to/project/prj -u '*.cpp' -f pedantic Wall Wextra
 
   [I] Checking 3 matching entries(s) ...
   [I] OK
@@ -160,14 +162,16 @@ Some common use cases for the tool:
 - Filter by _logical libraries._ E.g. to check files compiled to
   _CMake target `lib`:_
   ```sh
-  $ ./cdb_check.py test_data/compile_commands.json -b /path/to/project/prj -l lib -f DLIB_DEFINE=1
+  $ ./cdb_check.py test_data/cdb.json -b /path/to/project/prj -l lib -f DLIB_DEFINE=1
 
   [I] Checking 2 matching entries(s) ...
   [I] OK
   ```
 
+### Using a config file
+
 - _Create a configuration_ to get rid of CLI options:
-  create a file `config.json` with contents
+  create a file `cfg.json` with contents
   ```json
   {
     "base_dirs": ["/path/to/prj"],
@@ -176,7 +180,7 @@ Some common use cases for the tool:
   ```
   and use this on the CLI:
   ```sh
-  $ ./cdb_check.py -c test_data/config.json test_data/compile_commands.json
+  $ ./cdb_check.py -c test_data/cfg.json test_data/cdb.json
 
   [I] Checking 4 entries(s) ...
   [I] OK
@@ -187,17 +191,51 @@ Some common use cases for the tool:
   ```sh
   # Each command runs common checks and
   # - check C++ standard
-  ./cdb_check.py -c test_data/config.json test_data/compile_commands.json -u '*.cpp' -f std=c++11
+  ./cdb_check.py -c test_data/cfg.json test_data/cdb.json -u '*.cpp' -f std=c++11
   # - check C standard
-  ./cdb_check.py -c test_data/config.json test_data/compile_commands.json -u '*.c' -f std=c11
+  ./cdb_check.py -c test_data/cfg.json test_data/cdb.json -u '*.c' -f std=c11
   # - check for '-pedantic' and definitions in library
-  ./cdb_check.py -c test_data/config.json test_data/compile_commands.json -l lib -f DLIB_DEFINE=1
+  ./cdb_check.py -c test_data/cfg.json test_data/cdb.json -l lib -f DLIB_DEFINE=1
   ```
 
-> Note: all examples above can be run by the script `test_data/run_examples.sh`
+### Presets in configuration
+
+Consider a multi platform project, e.g. compiled to x86 and _aarch64._
+The latter will produce a different `compile_commands.json`,
+e.g. like `test_data/cdb_aarch64.json`. The config file can be used to
+declare presets based on the compiler:
+```json
+{
+  "base_dirs": ["/path/to/project/prj", "/path/to/toolchains"],
+  "flags": ["Wall", "Wextra", "g", "I[...]/include"],
+  "flags_by_compiler": {
+    "aarch64-oe-linux-*": ["finline-limit=64", "D__ARM_PCS_VFP"]
+  }
+}
+```
+
+This will add the extra flags the the checked set for
+the matching compilations. The same can be used to differentiate
+by language:
+```json
+  "flags_by_compiler": {
+    "c++": ["std=c++11"],
+    "gcc": ["std=c11"],
+  }
+```
+
+This matching is a _first-fit matching_ with a special default key `*`
+for unmatched compilers. This can be used even to enforce
+the specification with any custom non-existing flag:
+```json
+  "flags_by_compiler": {
+    "aarch64-oe-linux-*": ["finline-limit=64", "D__ARM_PCS_VFP"],
+    "*": ["fail_as_compiler_has_no_preset"]
+  }
+```
 
 ## Planned features:
 
-- preset flag lists in configuration for different compilers
+- preset flag lists in configuration for libraries and files
 - maybe add a minimalistic support for makefiles
 
