@@ -220,18 +220,14 @@ class Config:
 
 
 def check_cdb(cdb: List[CdbEntry],
-              cu_files: List[str] = [],
-              libraries: List[str] = [],
-              flags: List[str] = [],
+              cfg: Config,
               dump: bool = False) -> bool:
     """
     Perform check of flags on a CDB.
 
     Args:
         cdb: List of normalized CDB entries
-        cu_files: List of files to check, defaults to check all.
-        libraries: List of libraries to check, defaults to check all.
-        flags: Compile flags to check
+        cfg: Configuration
         dump: Dump the entries included in the check and return success
 
     Returns:
@@ -243,18 +239,18 @@ def check_cdb(cdb: List[CdbEntry],
     logger = logging.getLogger()
 
     filtered = False
-    if libraries:
+    if cfg.libraries:
         filtered = True
         logger.debug('Filtered to libraries:')
-        logger.debug(', '.join(libraries))
-        cdb = [e for e in cdb if in_libraries(e, libraries)]
+        logger.debug(', '.join(cfg.libraries))
+        cdb = [e for e in cdb if in_libraries(e, cfg.libraries)]
 
-    if cu_files:
+    if cfg.compile_units:
         filtered = True
         logger.debug('Filtered to files:')
-        logger.debug(', '.join(cu_files))
+        logger.debug(', '.join(cfg.compile_units))
 
-        cdb = [e for e in cdb if in_files(e, cu_files)]
+        cdb = [e for e in cdb if in_files(e, cfg.compile_units)]
 
     qualifier = ' matching' if filtered else ''
     logger.info(f'Checking {len(cdb)}{qualifier} entries(s) ...')
@@ -263,17 +259,14 @@ def check_cdb(cdb: List[CdbEntry],
         if dump:
             dump_entry(e)
         else:
-            if not check_flags(e, flags):
+            if not check_flags(e, cfg.flags):
                 all_ok = False
 
     return all_ok
 
 
 def process(cdb_file: str,
-            cu_files: List[str] = [],
-            libraries: List[str] = [],
-            flags: List[str] = [],
-            base_dirs: List[str] = [],
+            cfg: Config,
             dump: bool = False) -> bool:
     """
     Full processing of a CDB.
@@ -296,12 +289,8 @@ def process(cdb_file: str,
     logging.getLogger().debug(f'Checking {cdb_file} ...')
 
     cdb = load_cdb(cdb_file)
-    cdb = [normalize(e, base_dirs=base_dirs) for e in cdb]
-    return check_cdb(cdb,
-                     cu_files=cu_files,
-                     libraries=libraries,
-                     flags=flags,
-                     dump=dump)
+    cdb = [normalize(e, base_dirs=cfg.base_dirs) for e in cdb]
+    return check_cdb(cdb, cfg=cfg, dump=dump)
 
 
 def update_config(cfg: Config,
@@ -421,10 +410,7 @@ def main():
         print(asdict(cfg))
 
     if process(args.input,
-               cu_files=cfg.compile_units,
-               libraries=cfg.libraries,
-               flags=cfg.flags,
-               base_dirs=cfg.base_dirs,
+               cfg=cfg,
                dump=args.dump):
         logger.info('OK')
     else:
@@ -578,13 +564,15 @@ TEST_CDB = [TEST_ENTRY, TEST_ENTRY_2, TEST_ENTRY_3]
 
 def test_check_cdb():
 
-    assert check_cdb(TEST_CDB, flags=['A1'])
-    assert not check_cdb(TEST_CDB, flags=['A1', 'A2'])
+    assert check_cdb(TEST_CDB, cfg=Config(flags=['A1']))
+    assert not check_cdb(TEST_CDB, cfg=Config(flags=['A1', 'A2']))
 
-    assert check_cdb(TEST_CDB, cu_files=[TEST_ENTRY_2.file], flags=['A1', 'A2'])
-    assert not check_cdb(TEST_CDB, cu_files=[TEST_ENTRY_2.file], flags=['A1', 'A5'])
-
-    assert check_cdb(TEST_CDB, libraries=['lib'], flags=['A1', 'A2'])
+    assert check_cdb(TEST_CDB, cfg=Config(compile_units=[TEST_ENTRY_2.file],
+                                          flags=['A1', 'A2']))
+    assert not check_cdb(TEST_CDB, cfg=Config(compile_units=[TEST_ENTRY_2.file],
+                                              flags=['A1', 'A5']))
+    assert check_cdb(TEST_CDB, cfg=Config(libraries=['lib'],
+                                          flags=['A1', 'A2']))
 
 
 FILE_1 = 'file1'
