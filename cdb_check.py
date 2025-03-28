@@ -6,7 +6,7 @@ Tool to verify C/C++ build configuration by checking the compile database.
 Usage: see `cdb_check.py -h` for details.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field, fields, asdict
 from pathlib import PurePath, Path
 from typing import List, Dict, Union
 import argparse
@@ -37,6 +37,12 @@ class CdbEntry:
 
 OUT_FLAG = '-o'
 PATH_REPLACEMENT = '[...]'
+
+WILDCARD = '*'
+
+
+def dedup(l: List) -> List:
+    return list(dict.fromkeys(l).keys())
 
 
 def to_entry(command: Dict[str, str]) -> CdbEntry:
@@ -201,19 +207,55 @@ def dump_entry(e: CdbEntry):
         print(ARG_PREFIX + ('\n' + ARG_PREFIX).join(e.args))
 
 
+@dataclass
+class Config:
+    base_dirs: List[str] = field(default_factory=list)
+    libraries: List[str] = field(default_factory=list)
+    compile_units: List[str] = field(default_factory=list)
+    flags: List[str] = field(default_factory=list)
+    verbose: bool = False
+    flags_by_compiler: Dict[str, List[str]] = field(default_factory=dict)
+    extra: Dict[str, Union[bool, str, List[str]]] = field(default_factory=dict)
+
+    @staticmethod
+    def from_dict(val: Dict, report_foreign_keys: bool = False) -> 'Config':
+        return update_config(Config(), val, report_foreign_keys=report_foreign_keys)
+
+    @staticmethod
+    def keys():
+        return [f.name for f in fields(Config) if f.name != 'extra']
+
+
+def get_flags_by_compiler(cfg: Config, comp: str) -> List[str]:
+    """
+    Fetch all flags for a specific compiler with joining
+    the common and the the predefined flags from the configuration.
+
+    Args:
+        cfg: Config
+        comp: Compiler property of a CdbEntry
+
+    Returns:
+        List[str]: Flags, the value of cfg.flags and cfg.flags_by_compiler[name]
+                   if the configured name matches `comp`.
+    """
+    comp_path = PurePath(comp.removeprefix(PATH_REPLACEMENT))
+    for k, v in cfg.flags_by_compiler.items():
+        assert isinstance(v, list)
+        if k != WILDCARD and comp_path.match(k):
+            return dedup(cfg.flags + v)
+    return dedup(cfg.flags + cfg.flags_by_compiler.get(WILDCARD, []))
+
+
 def check_cdb(cdb: List[CdbEntry],
-              cu_files: List[str] = [],
-              libraries: List[str] = [],
-              flags: List[str] = [],
+              cfg: Config,
               dump: bool = False) -> bool:
     """
     Perform check of flags on a CDB.
 
     Args:
         cdb: List of normalized CDB entries
-        cu_files: List of files to check, defaults to check all.
-        libraries: List of libraries to check, defaults to check all.
-        flags: Compile flags to check
+        cfg: Configuration
         dump: Dump the entries included in the check and return success
 
     Returns:
@@ -225,18 +267,18 @@ def check_cdb(cdb: List[CdbEntry],
     logger = logging.getLogger()
 
     filtered = False
-    if libraries:
+    if cfg.libraries:
         filtered = True
         logger.debug('Filtered to libraries:')
-        logger.debug(', '.join(libraries))
-        cdb = [e for e in cdb if in_libraries(e, libraries)]
+        logger.debug(', '.join(cfg.libraries))
+        cdb = [e for e in cdb if in_libraries(e, cfg.libraries)]
 
-    if cu_files:
+    if cfg.compile_units:
         filtered = True
         logger.debug('Filtered to files:')
-        logger.debug(', '.join(cu_files))
+        logger.debug(', '.join(cfg.compile_units))
 
-        cdb = [e for e in cdb if in_files(e, cu_files)]
+        cdb = [e for e in cdb if in_files(e, cfg.compile_units)]
 
     qualifier = ' matching' if filtered else ''
     logger.info(f'Checking {len(cdb)}{qualifier} entries(s) ...')
@@ -245,6 +287,7 @@ def check_cdb(cdb: List[CdbEntry],
         if dump:
             dump_entry(e)
         else:
+            flags = get_flags_by_compiler(cfg, e.compiler)
             if not check_flags(e, flags):
                 all_ok = False
 
@@ -252,10 +295,7 @@ def check_cdb(cdb: List[CdbEntry],
 
 
 def process(cdb_file: str,
-            cu_files: List[str] = [],
-            libraries: List[str] = [],
-            flags: List[str] = [],
-            base_dirs: List[str] = [],
+            cfg: Config,
             dump: bool = False) -> bool:
     """
     Full processing of a CDB.
@@ -278,18 +318,47 @@ def process(cdb_file: str,
     logging.getLogger().debug(f'Checking {cdb_file} ...')
 
     cdb = load_cdb(cdb_file)
-    cdb = [normalize(e, base_dirs=base_dirs) for e in cdb]
-    return check_cdb(cdb,
-                     cu_files=cu_files,
-                     libraries=libraries,
-                     flags=flags,
-                     dump=dump)
+    cdb = [normalize(e, base_dirs=cfg.base_dirs) for e in cdb]
+    return check_cdb(cdb, cfg=cfg, dump=dump)
 
 
-Config = Dict[str, Union[bool, str, List[str]]]
+def update_config(cfg: Config,
+                  data_to_add: Dict,
+                  report_foreign_keys: bool = False) -> Config:
+    known_keys = [k for k in data_to_add.keys() if k in Config.keys()]
+    foreign_keys = [k for k in data_to_add.keys() if k not in known_keys]
+
+    def add(existing, val):
+        if isinstance(existing, list):
+            assert isinstance(val, list)
+            return dedup(existing + val)
+        elif isinstance(existing, dict):
+            assert isinstance(val, dict)
+            res = copy.copy(existing)
+            for k, v in val.items():
+                res[k] = add(res[k], v) if k in res.keys() else v
+            return res
+        elif isinstance(existing, bool):
+            return existing or val
+        else:
+            return val
+
+    updated = copy.copy(cfg)
+    for k in known_keys:
+        setattr(updated, k, add(getattr(updated, k), data_to_add[k]))
+
+    for k in foreign_keys:
+        updated.extra[k] = data_to_add[k]
+
+    if report_foreign_keys and foreign_keys:
+        keys_logged = ', '. join(foreign_keys)
+        logging.getLogger().warning('Foreign keys in config file:')
+        logging.getLogger().warning(f'  {keys_logged}')
+
+    return updated
 
 
-def load_config(file: str) -> Config:
+def load_config(file: str) -> Dict:
     """
     Load config file to a dictionary.
     """
@@ -330,26 +399,14 @@ multiple times to different libraries with different setup.
     return parser
 
 
-def merge_config(cfg_from_file: Config,
+def merge_config(cfg_from_file: Dict,
                  cfg_from_args: argparse.Namespace) -> Config:
     """
     Merge config file and CLI arguments to a consistent config set.
     """
-    cfg = copy.copy(cfg_from_file)
-    cli_args = {k: v for k, v in vars(cfg_from_args).items() if (v is not None) and (k not in ['config', 'input'])}
-    for k, v in cli_args.items():
-        if isinstance(v, list) and k in cfg.keys():
-            cfg[k] = list(set(cfg[k] + v))
-        elif isinstance(v, bool):
-            cfg.setdefault(k, False)
-            cfg[k] = cfg[k] or v
-        else:
-            cfg[k] = v
-    cfg.setdefault('flags', [])
-    cfg.setdefault('base_dirs', [])
-    cfg.setdefault('libraries', [])
-    cfg.setdefault('compile_units', [])
-    return cfg
+    cfg = Config.from_dict(cfg_from_file, report_foreign_keys=True)
+    cli_args = {k: v for k, v in vars(cfg_from_args).items() if v is not None}
+    return update_config(cfg, cli_args)
 
 
 def configure(args: argparse.Namespace) -> Config:
@@ -381,22 +438,16 @@ def main():
     args = arg_parser().parse_args()
     cfg = configure(args)
 
-    if cfg['dump']:
-        cfg['verbose'] = True
-
-    configure_logging(cfg['verbose'])
+    configure_logging(args.dump or args.verbose)
     logger = logging.getLogger()
 
-    if cfg['dump']:
+    if args.dump:
         logger.debug('Configuration:')
-        print(cfg)
+        print(asdict(cfg))
 
     if process(args.input,
-               cu_files=cfg['compile_units'],
-               libraries=cfg['libraries'],
-               flags=cfg['flags'],
-               base_dirs=cfg['base_dirs'],
-               dump=cfg['dump']):
+               cfg=cfg,
+               dump=args.dump):
         logger.info('OK')
     else:
         exit(1)
@@ -407,6 +458,11 @@ if __name__ == "__main__":
 
 
 # Tests
+
+
+def test_dedup():
+    assert dedup([1, 1, 2, 1, 2, 3]) == [1, 2, 3]
+
 
 def test_to_entry():
 
@@ -532,6 +588,51 @@ def test_in_libraries():
     assert in_libraries(TEST_ENTRY, ['lib', 'some-other-lib'])
 
 
+def test_get_flags_by_compiler():
+
+    def check(ref: List[str], flags: List[str]):
+        assert all(f in flags for f in ref)
+
+    assert not get_flags_by_compiler(Config(), '')
+    assert not get_flags_by_compiler(Config(), 'gcc-5')
+
+    DEF = ['X', 'Y']
+
+    CFG = Config(flags=DEF,
+                 flags_by_compiler={
+                     'gcc-5': ['A5', 'Y', 'B5', 'C5'],
+                     'g*-8': ['A8', 'B8', 'C8'],
+                     'bin/g*-11': ['D11', 'E11'],
+                 })
+
+    assert get_flags_by_compiler(CFG, '') == DEF
+    assert get_flags_by_compiler(CFG, 'gcc-4') == DEF
+
+    f = get_flags_by_compiler(CFG, 'gcc-5')
+    check(CFG.flags, f)
+    check(CFG.flags_by_compiler['gcc-5'], f)
+    assert len(f) == len(CFG.flags) + len(CFG.flags_by_compiler['gcc-5']) - 1
+
+    f = get_flags_by_compiler(CFG, 'g++-8')
+    check(CFG.flags, f)
+    check(CFG.flags_by_compiler['g*-8'], f)
+
+    f = get_flags_by_compiler(CFG, '/usr/bin/gcc-11')
+    check(CFG.flags, f)
+    check(CFG.flags_by_compiler['bin/g*-11'], f)
+
+    CFG_WITH_DEFAULTS = update_config(CFG, {'flags_by_compiler': {'*': ['Fall']}})
+
+    f = get_flags_by_compiler(CFG_WITH_DEFAULTS, 'g++-8')
+    check(CFG_WITH_DEFAULTS.flags, f)
+    check(CFG_WITH_DEFAULTS.flags_by_compiler['g*-8'], f)
+    assert 'Fall' not in f
+
+    f = get_flags_by_compiler(CFG_WITH_DEFAULTS, 'gcc-4')
+    check(CFG_WITH_DEFAULTS.flags, f)
+    check(CFG_WITH_DEFAULTS.flags_by_compiler['*'], f)
+
+
 TEST_ENTRY_2 = CdbEntry(file='/path/to/src/file2.c',
                         directory='/path/to/build',
                         compiler='/path/to/compiler/gcc',
@@ -549,24 +650,15 @@ TEST_CDB = [TEST_ENTRY, TEST_ENTRY_2, TEST_ENTRY_3]
 
 def test_check_cdb():
 
-    assert check_cdb(TEST_CDB, flags=['A1'])
-    assert not check_cdb(TEST_CDB, flags=['A1', 'A2'])
+    assert check_cdb(TEST_CDB, cfg=Config(flags=['A1']))
+    assert not check_cdb(TEST_CDB, cfg=Config(flags=['A1', 'A2']))
 
-    assert check_cdb(TEST_CDB, cu_files=[TEST_ENTRY_2.file], flags=['A1', 'A2'])
-    assert not check_cdb(TEST_CDB, cu_files=[TEST_ENTRY_2.file], flags=['A1', 'A5'])
-
-    assert check_cdb(TEST_CDB, libraries=['lib'], flags=['A1', 'A2'])
-
-
-def test_merge_config_defaults():
-
-    args = arg_parser().parse_args(['cc.json'])
-    cfg = merge_config({}, args)
-
-    assert cfg['compile_units'] == []
-    assert cfg['flags'] == []
-    assert cfg['base_dirs'] == []
-    assert not cfg['verbose']
+    assert check_cdb(TEST_CDB, cfg=Config(compile_units=[TEST_ENTRY_2.file],
+                                          flags=['A1', 'A2']))
+    assert not check_cdb(TEST_CDB, cfg=Config(compile_units=[TEST_ENTRY_2.file],
+                                              flags=['A1', 'A5']))
+    assert check_cdb(TEST_CDB, cfg=Config(libraries=['lib'],
+                                          flags=['A1', 'A2']))
 
 
 FILE_1 = 'file1'
@@ -577,15 +669,44 @@ DIR_1 = 'dir1'
 DIR_2 = 'dir2'
 
 
+def test_update_config():
+
+    assert update_config(Config(), {}) == Config()
+
+    AD_HOC_DATA = {'a': True, 'b': ['b1', 'b1']}
+    cfg = update_config(Config(), AD_HOC_DATA)
+    assert cfg.extra == AD_HOC_DATA
+
+    cfg = update_config(Config(), {'flags': [FLAG_1, FLAG_2]})
+    assert cfg.flags == [FLAG_1, FLAG_2]
+    assert not cfg.extra
+
+    cfg = update_config(Config(base_dirs=[DIR_1]), {'base_dirs': [DIR_2]})
+    assert cfg.base_dirs == [DIR_1, DIR_2]
+    assert not cfg.extra
+
+
+def test_merge_config_defaults():
+
+    args = arg_parser().parse_args(['cc.json'])
+    cfg = merge_config({}, args)
+
+    assert cfg.compile_units == []
+    assert cfg.flags == []
+    assert cfg.base_dirs == []
+    assert not cfg.verbose
+    assert cfg.flags_by_compiler == {}
+
+
 def test_merge_config_no_file():
 
     args = arg_parser().parse_args(['cc.json', '-u', FILE_1, FILE_2, '-f', FLAG_1, FLAG_2, '-b', DIR_1, DIR_2, '-v'])
     cfg = merge_config({}, args)
 
-    assert cfg['compile_units'] == [FILE_1, FILE_2]
-    assert cfg['flags'] == [FLAG_1, FLAG_2]
-    assert cfg['base_dirs'] == [DIR_1, DIR_2]
-    assert cfg['verbose']
+    assert cfg.compile_units == [FILE_1, FILE_2]
+    assert cfg.flags == [FLAG_1, FLAG_2]
+    assert cfg.base_dirs == [DIR_1, DIR_2]
+    assert cfg.verbose
 
 
 def test_merge_config_from_file():
@@ -600,10 +721,10 @@ def test_merge_config_from_file():
     args = arg_parser().parse_args(['cc.json'])
     cfg = merge_config(CFG_FROM_FILE, args)
 
-    assert cfg['compile_units'] == [FILE_1, FILE_2]
-    assert cfg['flags'] == [FLAG_1, FLAG_2]
-    assert cfg['base_dirs'] == [DIR_1, DIR_2]
-    assert cfg['verbose']
+    assert cfg.compile_units == [FILE_1, FILE_2]
+    assert cfg.flags == [FLAG_1, FLAG_2]
+    assert cfg.base_dirs == [DIR_1, DIR_2]
+    assert cfg.verbose
 
 
 def test_merge_config_from_both():
@@ -618,7 +739,14 @@ def test_merge_config_from_both():
     args = arg_parser().parse_args(['cc.json', '-u', FILE_2, '-f', FLAG_1, FLAG_2, '-b', DIR_2, '-v'])
     cfg = merge_config(CFG_FROM_FILE, args)
 
-    assert all((v in cfg['compile_units']) for v in [FILE_1, FILE_2])
-    assert all((v in cfg['flags']) for v in [FLAG_1, FLAG_2])
-    assert all((v in cfg['base_dirs']) for v in [DIR_1, DIR_2])
-    assert cfg['verbose']
+    assert cfg.compile_units == [FILE_1, FILE_2]
+    assert cfg.flags == [FLAG_1, FLAG_2]
+    assert cfg.base_dirs == [DIR_1, DIR_2]
+    assert cfg.verbose
+
+
+def test_merge_config_extra_fields():
+
+    args = arg_parser().parse_args(['cc.json'])
+    cfg = merge_config({}, args)
+    assert cfg.extra['input'] == 'cc.json'
