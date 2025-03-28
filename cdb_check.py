@@ -38,6 +38,12 @@ class CdbEntry:
 OUT_FLAG = '-o'
 PATH_REPLACEMENT = '[...]'
 
+WILDCARD = '*'
+
+
+def dedup(l: List) -> List:
+    return list(dict.fromkeys(l).keys())
+
 
 def to_entry(command: Dict[str, str]) -> CdbEntry:
     """
@@ -208,6 +214,7 @@ class Config:
     compile_units: List[str] = field(default_factory=list)
     flags: List[str] = field(default_factory=list)
     verbose: bool = False
+    flags_by_compiler: Dict[str, List[str]] = field(default_factory=dict)
     extra: Dict[str, Union[bool, str, List[str]]] = field(default_factory=dict)
 
     @staticmethod
@@ -217,6 +224,27 @@ class Config:
     @staticmethod
     def keys():
         return [f.name for f in fields(Config) if f.name != 'extra']
+
+
+def get_flags_by_compiler(cfg: Config, comp: str) -> List[str]:
+    """
+    Fetch all flags for a specific compiler with joining
+    the common and the the predefined flags from the configuration.
+
+    Args:
+        cfg: Config
+        comp: Compiler property of a CdbEntry
+
+    Returns:
+        List[str]: Flags, the value of cfg.flags and cfg.flags_by_compiler[name]
+                   if the configured name matches `comp`.
+    """
+    comp_path = PurePath(comp.removeprefix(PATH_REPLACEMENT))
+    for k, v in cfg.flags_by_compiler.items():
+        assert isinstance(v, list)
+        if k != WILDCARD and comp_path.match(k):
+            return dedup(cfg.flags + v)
+    return dedup(cfg.flags + cfg.flags_by_compiler.get(WILDCARD, []))
 
 
 def check_cdb(cdb: List[CdbEntry],
@@ -259,7 +287,8 @@ def check_cdb(cdb: List[CdbEntry],
         if dump:
             dump_entry(e)
         else:
-            if not check_flags(e, cfg.flags):
+            flags = get_flags_by_compiler(cfg, e.compiler)
+            if not check_flags(e, flags):
                 all_ok = False
 
     return all_ok
@@ -300,9 +329,16 @@ def update_config(cfg: Config,
     foreign_keys = [k for k in data_to_add.keys() if k not in known_keys]
 
     def add(existing, val):
-        if isinstance(val, list) and existing:
-            return list(dict.fromkeys(existing + val).keys())
-        elif isinstance(val, bool):
+        if isinstance(existing, list):
+            assert isinstance(val, list)
+            return dedup(existing + val)
+        elif isinstance(existing, dict):
+            assert isinstance(val, dict)
+            res = copy.copy(existing)
+            for k, v in val.items():
+                res[k] = add(res[k], v) if k in res.keys() else v
+            return res
+        elif isinstance(existing, bool):
             return existing or val
         else:
             return val
@@ -422,6 +458,11 @@ if __name__ == "__main__":
 
 
 # Tests
+
+
+def test_dedup():
+    assert dedup([1, 1, 2, 1, 2, 3]) == [1, 2, 3]
+
 
 def test_to_entry():
 
@@ -547,6 +588,51 @@ def test_in_libraries():
     assert in_libraries(TEST_ENTRY, ['lib', 'some-other-lib'])
 
 
+def test_get_flags_by_compiler():
+
+    def check(ref: List[str], flags: List[str]):
+        assert all(f in flags for f in ref)
+
+    assert not get_flags_by_compiler(Config(), '')
+    assert not get_flags_by_compiler(Config(), 'gcc-5')
+
+    DEF = ['X', 'Y']
+
+    CFG = Config(flags=DEF,
+                 flags_by_compiler={
+                     'gcc-5': ['A5', 'Y', 'B5', 'C5'],
+                     'g*-8': ['A8', 'B8', 'C8'],
+                     'bin/g*-11': ['D11', 'E11'],
+                 })
+
+    assert get_flags_by_compiler(CFG, '') == DEF
+    assert get_flags_by_compiler(CFG, 'gcc-4') == DEF
+
+    f = get_flags_by_compiler(CFG, 'gcc-5')
+    check(CFG.flags, f)
+    check(CFG.flags_by_compiler['gcc-5'], f)
+    assert len(f) == len(CFG.flags) + len(CFG.flags_by_compiler['gcc-5']) - 1
+
+    f = get_flags_by_compiler(CFG, 'g++-8')
+    check(CFG.flags, f)
+    check(CFG.flags_by_compiler['g*-8'], f)
+
+    f = get_flags_by_compiler(CFG, '/usr/bin/gcc-11')
+    check(CFG.flags, f)
+    check(CFG.flags_by_compiler['bin/g*-11'], f)
+
+    CFG_WITH_DEFAULTS = update_config(CFG, {'flags_by_compiler': {'*': ['Fall']}})
+
+    f = get_flags_by_compiler(CFG_WITH_DEFAULTS, 'g++-8')
+    check(CFG_WITH_DEFAULTS.flags, f)
+    check(CFG_WITH_DEFAULTS.flags_by_compiler['g*-8'], f)
+    assert 'Fall' not in f
+
+    f = get_flags_by_compiler(CFG_WITH_DEFAULTS, 'gcc-4')
+    check(CFG_WITH_DEFAULTS.flags, f)
+    check(CFG_WITH_DEFAULTS.flags_by_compiler['*'], f)
+
+
 TEST_ENTRY_2 = CdbEntry(file='/path/to/src/file2.c',
                         directory='/path/to/build',
                         compiler='/path/to/compiler/gcc',
@@ -609,6 +695,7 @@ def test_merge_config_defaults():
     assert cfg.flags == []
     assert cfg.base_dirs == []
     assert not cfg.verbose
+    assert cfg.flags_by_compiler == {}
 
 
 def test_merge_config_no_file():
