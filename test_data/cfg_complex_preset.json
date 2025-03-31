@@ -6,5 +6,9 @@
   },
   "flags_by_library": {
     "lib": ["DLIB_DEFINE=1", "pedantic"]
+  },
+  "flags_by_file": {
+    "*.c": ["std=c11"],
+    "*.cpp": ["std=c++11", "pedantic"]
   }
 }
