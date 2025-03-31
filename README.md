@@ -38,6 +38,7 @@ See `./cdb-check-py -h`
 - configurable with config file and/or CLI arguments
   - CLI arguments are extending the configuration if present
     to create custom scenarios easily
+  - automatically applied flag presets in config file
 - dump the loaded and filtered CDB for debugging
 
 ## How to use?
@@ -80,7 +81,8 @@ This will generate a compile DB like
 ]
 ```
 
-Let's assume this file is at `test_data/cdb.json`. Some common use cases for the tool:
+Let's assume this file is at `test_data/cdb.json`.
+Some _common use cases_ for the tool:
 
 > Note: all examples below can be run by the script `test_data/run_examples.sh`
 
@@ -108,7 +110,7 @@ Let's assume this file is at `test_data/cdb.json`. Some common use cases for the
   $ ./cdb_check.py test_data/cdb.json -u /path/to/project/prj/src/file4.c -d
 
   [D] Configuration:
-  {'base_dirs': [], 'libraries': [], 'compile_units': ['/path/to/project/prj/src/file4.c'], 'flags': [], 'verbose': False, 'flags_by_compiler': {}, 'extra': {'input': 'test_data/cdb.json', 'dump': True}}
+  {'base_dirs': [], 'libraries': [], 'compile_units': ['/path/to/project/prj/src/file4.c'], 'flags': [], 'verbose': False, 'flags_by_compiler': {}, 'flags_by_library': {}, 'flags_by_file': {}, 'extra': {'input': 'test_data/cdb.json', 'dump': True}}
   [D] Checking test_data/cdb.json ...
   [D] Filtered to files:
   [D] /path/to/project/prj/src/file4.c
@@ -130,7 +132,7 @@ Let's assume this file is at `test_data/cdb.json`. Some common use cases for the
   $ ./cdb_check.py test_data/cdb.json -b /path/to/project/prj -u file4.c -d
 
   [D] Configuration:
-  {'base_dirs': ['/path/to/project/prj'], 'libraries': [], 'compile_units': ['file4.c'], 'flags': [], 'verbose': False, 'flags_by_compiler': {}, 'extra': {'input': 'test_data/cdb.json', 'dump': True}}
+  {'base_dirs': ['/path/to/project/prj'], 'libraries': [], 'compile_units': ['file4.c'], 'flags': [], 'verbose': False, 'flags_by_compiler': {}, 'flags_by_library': {}, 'flags_by_file': {}, 'extra': {'input': 'test_data/cdb.json', 'dump': True}}
   [D] Checking test_data/cdb.json ...
   [D] Filtered to files:
   [D] file4.c
@@ -234,8 +236,104 @@ the specification with any custom non-existing flag:
   }
 ```
 
+Presets for 'libraries' or compile units can be added by the same method:
+```json
+  "flags_by_library": {
+    "lib": ["DLIB_DEFINE=1", "pedantic"]
+  },
+  "flags_by_file": {
+    "*.c": ["std=c11"],
+    "*.cpp": ["std=c++11"]
+  }
+```
+
+### Property matching methods
+
+Compilers and compile units are matched with
+[pathlib.PurePath.match()](https://docs.python.org/3/library/pathlib.html#pathlib.PurePath.match).
+This supports
+  - `*` for parts of a file or directory segment or a full segment
+  - `?` for one non-separator character
+  - `[seq]` for one character in 'seq'
+  - `[!seq]` for one character _not_ in 'seq'
+
+Note that _recursive wildcards_ (`**`) are not supported.
+The path is matched from the left if absolute, otherwise
+it's matched from the right.
+
+Libraries are matched with specialized substring lookups.
+A compilation is considered part of the library `LIB`
+if the path of the output file contains either
+- `/LIB/`, e.g. `/path/to/build/LIB/file.c.o`, or
+- `CMakeFiles/LIB.dir/`, e.g. `/path/to/build/CMakeFiles/LIB.dir/file.c.o`
+
+> More specializations can be added later for
+> build system generators other than CMake. In the meantime
+> just simply use the pattern you have. 
+
+
+## Configuration
+
+An overview of configuration options for processing:
+
+Option        | from CLI | from config file | Description
+--------------|----------|------------------|-----------------------------
+Basic flags   | Y        | Y                | Common flags to check on all
+Flag presets  | N        | Y                | Specific flags, additional to the common set
+Base dirs     | Y        | Y                | Directory prefixes to remove
+Compile units | Y        | Y                | Scope check to the specified files
+Libraries     | Y        | Y                | Scope check to the specified logical libraries
+
+All above but flag presets are lists. Options can be provided
+from CLI and config file at the same time, in this case the options are
+appended, i.e. both CLI and file options are applied.
+
+Here comes some pseudocode for the details.
+A CDB is loaded and prepared:
+```py
+prefixes_to_remove = (cfg.base_dirs + args.base_dirs)
+for entry in cdb:
+    separate_arguments_to_properties(entry)
+    remove_path_prefixes(entry, prefixes_to_remove)
+```
+
+The scope of compilations to check is determined:
+```py
+# scoping properties, default to all:
+libs_to_check = (cfg.compile_units + args.compile_units) or CHECK_ALL
+cus_to_check = (cfg.compile_units + args.compile_units) or CHECK_ALL
+
+scope_of_check = []
+for entry in cdb:
+    if match(entry, libs_to_check) and match(entry, cus_to_check):
+      scope_of_check.append(entry)
+```
+
+The flags to check for a single compilation are:
+```py
+# basic flags
+flags = cfg.flags + args.flags
+# flags by compiler
+flags += select_preset(cfg.flags_by_compiler, entry)
+# flags by library
+flags += select_preset(cfg.flags_by_library, entry)
+# flags by compile unit name
+flags += select_preset(cfg.flags_by_file, entry)
+```
+
+where `select_preset` is a _first-fit_ method with
+fallback to the wildcard `*` preset:
+```py
+for p in presets:  
+    if match(entry, p):
+        return presets[p]   # select 'p' on match, or
+if '*' presets:
+    return presets['*']     # select default if present, or
+else:
+    return []               # select none
+```
+
 ## Planned features:
 
-- preset flag lists in configuration for libraries and files
+- builtin library patterns for non-cmake build system generators
 - maybe add a minimalistic support for makefiles
-

@@ -28,8 +28,14 @@ echo "Check library options ..."
 
 echo "Config file with compiler presets ..."
 echo "- x86 ..."
-./cdb_check.py -v -c test_data/cfg_comp_preset.json test_data/cdb.json
+./cdb_check.py -c test_data/cfg_comp_preset.json test_data/cdb.json
 echo "- aarch64 ..."
-./cdb_check.py -v -c test_data/cfg_comp_preset.json test_data/cdb_aarch64.json
+./cdb_check.py -c test_data/cfg_comp_preset.json test_data/cdb_aarch64.json
+
+echo "Config file with complex presets ..."
+echo "- x86 ..."
+./cdb_check.py -v -c test_data/cfg_complex_preset.json test_data/cdb.json
+echo "- aarch64 ..."
+./cdb_check.py -v -c test_data/cfg_complex_preset.json test_data/cdb_aarch64.json
 
 popd

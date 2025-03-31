@@ -8,7 +8,7 @@ Usage: see `cdb_check.py -h` for details.
 
 from dataclasses import dataclass, field, fields, asdict
 from pathlib import PurePath, Path
-from typing import List, Dict, Union
+from typing import List, Dict, Union, Callable
 import argparse
 import copy
 import json
@@ -154,10 +154,12 @@ def check_flags(entry: CdbEntry, flags: List[str]) -> bool:
         bool: True if all flags are present in the compilation.
 
     TODO:
+        - support '--' prefix
         - support MSVC arguments
     """
     logger = logging.getLogger()
     logger.debug(f'Checking {entry.file}')
+    logger.debug(f'  expecting {" ".join(flags) if flags else "none"}')
     res = True
     for f in flags:
         if f'-{f}' not in entry.args:
@@ -166,7 +168,7 @@ def check_flags(entry: CdbEntry, flags: List[str]) -> bool:
     return res
 
 
-def in_files(entry: CdbEntry, cu_files: List[str]) -> bool:
+def in_files(entry: Union[CdbEntry, str], cu_files: Union[List[str], str]) -> bool:
     """
     Check if an entry is associated to a _whitelisted_ file.
     The association is checked with pathlib.match() thus
@@ -175,10 +177,18 @@ def in_files(entry: CdbEntry, cu_files: List[str]) -> bool:
     Returns:
         bool: True if the entry is whitelisted.
     """
-    return any(PurePath(entry.file).match(f) for f in cu_files)
+    if isinstance(entry, CdbEntry):
+        return in_files(entry.file, cu_files)
+    if isinstance(cu_files, str):
+        return in_files(entry, [cu_files])
+
+    assert isinstance(entry, str)
+    assert isinstance(cu_files, list)
+
+    return any(PurePath(entry).match(f) for f in cu_files)
 
 
-def in_libraries(entry: CdbEntry, libraries: List[str]) -> bool:
+def in_libraries(entry: Union[CdbEntry, str], libraries: Union[List[str], str]) -> bool:
     """
     Check if an entry is associated to a _whitelisted_ library.
     The association is defined by the output file path of the
@@ -187,9 +197,17 @@ def in_libraries(entry: CdbEntry, libraries: List[str]) -> bool:
     Returns:
         bool: True if the entry is matching a whitelisted library.
     """
+    if isinstance(entry, CdbEntry):
+        return in_libraries(entry.out_file, libraries)
+    if isinstance(libraries, str):
+        return in_libraries(entry, [libraries])
+
+    assert isinstance(entry, str)
+    assert isinstance(libraries, list)
+
     def match(lib: str) -> bool:
         l = lib.removeprefix('/').removesuffix('/')
-        return (f'/{l}/' in entry.out_file) or (f'CMakeFiles/{lib}.dir' in entry.out_file)
+        return (f'/{l}/' in entry) or (f'CMakeFiles/{lib}.dir' in entry)
     return any(match(l) for l in libraries)
 
 
@@ -215,6 +233,8 @@ class Config:
     flags: List[str] = field(default_factory=list)
     verbose: bool = False
     flags_by_compiler: Dict[str, List[str]] = field(default_factory=dict)
+    flags_by_library: Dict[str, List[str]] = field(default_factory=dict)
+    flags_by_file: Dict[str, List[str]] = field(default_factory=dict)
     extra: Dict[str, Union[bool, str, List[str]]] = field(default_factory=dict)
 
     @staticmethod
@@ -226,25 +246,88 @@ class Config:
         return [f.name for f in fields(Config) if f.name != 'extra']
 
 
+def select_preset(presets: Dict[str, List[str]], predicate: Callable[[str], bool]) -> List[str]:
+    """
+    Select from preset list by predicate.
+
+    Returns:
+        List[str]: - Matching preset value, or
+                   - preset[WILDCARD] if present, or
+                   - empty
+    """
+    for k, v in presets.items():
+        assert isinstance(v, list)
+        if k != WILDCARD and predicate(k):
+            return v
+    return presets.get(WILDCARD, [])
+
+
 def get_flags_by_compiler(cfg: Config, comp: str) -> List[str]:
     """
-    Fetch all flags for a specific compiler with joining
-    the common and the the predefined flags from the configuration.
+    Fetch compiler specific flags from the predefined set in configuration.
 
     Args:
         cfg: Config
         comp: Compiler property of a CdbEntry
 
     Returns:
-        List[str]: Flags, the value of cfg.flags and cfg.flags_by_compiler[name]
-                   if the configured name matches `comp`.
+        List[str]: Flags, the value of
+                   - cfg.flags_by_compiler[name] if the configured name matches `comp`, or
+                   - cfg.flags_by_compiler[WILDCARD] if present, or
+                   - empty
     """
     comp_path = PurePath(comp.removeprefix(PATH_REPLACEMENT))
-    for k, v in cfg.flags_by_compiler.items():
-        assert isinstance(v, list)
-        if k != WILDCARD and comp_path.match(k):
-            return dedup(cfg.flags + v)
-    return dedup(cfg.flags + cfg.flags_by_compiler.get(WILDCARD, []))
+    return select_preset(cfg.flags_by_compiler, lambda x: comp_path.match(x))
+
+
+def get_flags_by_library(cfg: Config, out_file: str) -> List[str]:
+    """
+    Fetch flags for the matching library predefined in the configuration.
+
+    Args:
+        cfg: Config
+        out_file: Output file of a CdbEntry
+
+    Returns:
+        List[str]: Flags, the value of
+                   - cfg.flags_by_library[name] if the configured name matches `out_file`, or
+                   - cfg.flags_by_library[WILDCARD] if present, or
+                   - empty
+    """
+    return select_preset(cfg.flags_by_library, lambda x: in_libraries(out_file, x))
+
+
+def get_flags_by_file(cfg: Config, file: str) -> List[str]:
+    """
+    Fetch flags for the matching files predefined in the configuration.
+
+    Args:
+        cfg: Config
+        file: Compile unit of a CdbEntry
+
+    Returns:
+        List[str]: Flags, the value of
+                   - cfg.flags_by_file[name] if the configured name matches `file`, or
+                   - cfg.flags_by_file[WILDCARD] if present, or
+                   - empty
+    """
+    return select_preset(cfg.flags_by_file, lambda x: in_files(file, x))
+
+
+def check_entry(entry: CdbEntry, cfg: Config) -> bool:
+    """
+    Perform flag check on a CdbEntry by flags fetched from the configuration.
+
+    Returns:
+        bool: True if all flags are present in the compilation.
+    """
+
+    flags = cfg.flags \
+        + get_flags_by_compiler(cfg, entry.compiler) \
+        + get_flags_by_library(cfg, entry.out_file) \
+        + get_flags_by_file(cfg, entry.file)
+
+    return check_flags(entry, dedup(flags))
 
 
 def check_cdb(cdb: List[CdbEntry],
@@ -261,8 +344,6 @@ def check_cdb(cdb: List[CdbEntry],
     Returns:
         bool: True in case of check passed.
     """
-
-    all_ok = True
 
     logger = logging.getLogger()
 
@@ -283,13 +364,15 @@ def check_cdb(cdb: List[CdbEntry],
     qualifier = ' matching' if filtered else ''
     logger.info(f'Checking {len(cdb)}{qualifier} entries(s) ...')
 
-    for e in cdb:
-        if dump:
+    if dump:
+        for e in cdb:
             dump_entry(e)
-        else:
-            flags = get_flags_by_compiler(cfg, e.compiler)
-            if not check_flags(e, flags):
-                all_ok = False
+        return True
+
+    all_ok = True
+    for e in cdb:
+        if not check_entry(e, cfg):
+            all_ok = False
 
     return all_ok
 
@@ -386,6 +469,7 @@ def arg_parser() -> argparse.ArgumentParser:
                         help='Path prefixes to remove, either absolute or relative to $PWD')
     parser.add_argument('-d', '--dump', action='store_true', help='Dump entries to check')
     parser.add_argument('-v', '--verbose', action='store_true', help='Verbose logging')
+    parser.description = "Tool to verify C/C++ build configuration. See README.md for details."
     parser.epilog = """
 Notes about --libraries option:
 
@@ -564,7 +648,10 @@ def test_check_flags():
 def test_in_files():
 
     assert not in_files(TEST_ENTRY, [])
-    assert not in_files(TEST_ENTRY, ['src/file4.c'])
+    assert not in_files(TEST_ENTRY, 'src/file4.c')
+
+    assert in_files(TEST_ENTRY, 'src/file.c')
+    assert in_files(TEST_ENTRY.file, 'src/file.c')
 
     assert in_files(TEST_ENTRY, ['src/file.c'])
     assert in_files(TEST_ENTRY, ['src/file.c', 'src/file2.c'])
@@ -581,7 +668,10 @@ def test_in_files():
 def test_in_libraries():
 
     assert not in_libraries(TEST_ENTRY, [])
-    assert not in_libraries(TEST_ENTRY, ['some-lib-name'])
+    assert not in_libraries(TEST_ENTRY, 'some-lib-name')
+
+    assert in_libraries(TEST_ENTRY, 'lib')
+    assert in_libraries(TEST_ENTRY.out_file, 'lib')
 
     assert in_libraries(TEST_ENTRY, ['lib'])
     assert in_libraries(TEST_ENTRY, ['src'])
@@ -592,6 +682,7 @@ def test_get_flags_by_compiler():
 
     def check(ref: List[str], flags: List[str]):
         assert all(f in flags for f in ref)
+        assert len(ref) == len(flags)
 
     assert not get_flags_by_compiler(Config(), '')
     assert not get_flags_by_compiler(Config(), 'gcc-5')
@@ -605,45 +696,84 @@ def test_get_flags_by_compiler():
                      'bin/g*-11': ['D11', 'E11'],
                  })
 
-    assert get_flags_by_compiler(CFG, '') == DEF
-    assert get_flags_by_compiler(CFG, 'gcc-4') == DEF
+    assert not get_flags_by_compiler(CFG, '')
+    assert not get_flags_by_compiler(CFG, 'gcc-4')
 
     f = get_flags_by_compiler(CFG, 'gcc-5')
-    check(CFG.flags, f)
     check(CFG.flags_by_compiler['gcc-5'], f)
-    assert len(f) == len(CFG.flags) + len(CFG.flags_by_compiler['gcc-5']) - 1
 
     f = get_flags_by_compiler(CFG, 'g++-8')
-    check(CFG.flags, f)
     check(CFG.flags_by_compiler['g*-8'], f)
 
     f = get_flags_by_compiler(CFG, '/usr/bin/gcc-11')
-    check(CFG.flags, f)
     check(CFG.flags_by_compiler['bin/g*-11'], f)
 
     CFG_WITH_DEFAULTS = update_config(CFG, {'flags_by_compiler': {'*': ['Fall']}})
 
     f = get_flags_by_compiler(CFG_WITH_DEFAULTS, 'g++-8')
-    check(CFG_WITH_DEFAULTS.flags, f)
     check(CFG_WITH_DEFAULTS.flags_by_compiler['g*-8'], f)
     assert 'Fall' not in f
 
     f = get_flags_by_compiler(CFG_WITH_DEFAULTS, 'gcc-4')
-    check(CFG_WITH_DEFAULTS.flags, f)
     check(CFG_WITH_DEFAULTS.flags_by_compiler['*'], f)
+
+
+def test_get_flags_by_library():
+
+    def check(ref: List[str], flags: List[str]):
+        assert all(f in flags for f in ref)
+        assert len(ref) == len(flags)
+
+    assert not get_flags_by_library(Config(), TEST_ENTRY.out_file)
+
+    DEF = ['X', 'Y']
+
+    CFG = Config(flags=DEF,
+                 flags_by_library={
+                     'lib': ['A5', 'Y', 'B5', 'C5'],
+                     '*': ['D11', 'E11'],
+                 })
+
+    f = get_flags_by_library(CFG, TEST_ENTRY.out_file)
+    check(CFG.flags_by_library['lib'], f)
+
+    f = get_flags_by_library(CFG, '/path/to/build/CMakeFiles/lib2.dir/src/file.c.o')
+    check(CFG.flags_by_library[WILDCARD], f)
 
 
 TEST_ENTRY_2 = CdbEntry(file='/path/to/src/file2.c',
                         directory='/path/to/build',
                         compiler='/path/to/compiler/gcc',
-                        args=['-A1', '-c', 'xxx', '-A2', '-o', 'yyy', '-I/path/to/src/include'],
+                        args=['-A1', '-A2', '-I/path/to/src/include'],
                         out_file='/path/to/build/CMakeFiles/lib.dir/src/file2.c.o')
 
 TEST_ENTRY_3 = CdbEntry(file='/path/to/src/file3.c',
                         directory='/path/to/build',
                         compiler='/path/to/compiler/gcc',
-                        args=['-A1', '-c', 'xxx', '-A3', '-o', 'yyy', '-I/path/to/src/include'],
+                        args=['-A1', '-A3', '-A4', '-I/path/to/src/include'],
                         out_file='/path/to/build/CMakeFiles/lib2.dir/src/file3.c.o')
+
+
+def test_check_entry():
+
+    assert check_entry(TEST_ENTRY_2, cfg=Config(flags=['A1']))
+    assert not check_entry(TEST_ENTRY_2, cfg=Config(flags=['A1', 'A3']))
+
+    assert check_entry(TEST_ENTRY_2, cfg=Config(
+        flags_by_compiler={'gcc': ['A1'], '*': ['fail']}))
+    assert not check_entry(TEST_ENTRY_2, cfg=Config(
+        flags_by_compiler={'g++': ['A1'], '*': ['fail']}))
+
+    assert check_entry(TEST_ENTRY_2, cfg=Config(
+        flags_by_library={'lib': ['A2'], '*': ['fail']}))
+    assert not check_entry(TEST_ENTRY_3, cfg=Config(
+        flags_by_library={'lib2': ['A2'], '*': ['fail']}))
+
+    assert check_entry(TEST_ENTRY_2, cfg=Config(
+        flags_by_file={'file*.c': ['A2'], '*': ['fail']}))
+    assert not check_entry(TEST_ENTRY_2, cfg=Config(
+        flags_by_file={'file*.c': ['A5'], '*': ['fail']}))
+
 
 TEST_CDB = [TEST_ENTRY, TEST_ENTRY_2, TEST_ENTRY_3]
 
@@ -659,6 +789,17 @@ def test_check_cdb():
                                               flags=['A1', 'A5']))
     assert check_cdb(TEST_CDB, cfg=Config(libraries=['lib'],
                                           flags=['A1', 'A2']))
+
+    assert check_cdb(TEST_CDB, cfg=Config(
+        flags=['A1', 'I/path/to/src/include'],
+        flags_by_library={
+            'lib': ['A2'],
+            'lib2': ['A3']
+        },
+        flags_by_file={
+            "file3.c": ['A4']
+        }
+    ))
 
 
 FILE_1 = 'file1'
