@@ -271,6 +271,11 @@ if the path of the output file contains either
 > build system generators other than CMake. In the meantime
 > just simply use the pattern you have. 
 
+Flag matching supports to pass flags without the leading `-` prefix.
+This helps to pass CLI args easier. Because of this flag matching works like
+- match the flag as-is if it's first character is `-`, or
+- check if `-FLAG` or `--FLAG` is present.
+
 
 ## Configuration
 

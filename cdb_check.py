@@ -154,15 +154,24 @@ def check_flags(entry: CdbEntry, flags: List[str]) -> bool:
         bool: True if all flags are present in the compilation.
 
     TODO:
-        - support '--' prefix
         - support MSVC arguments
     """
     logger = logging.getLogger()
     logger.debug(f'Checking {entry.file}')
     logger.debug(f'  expecting {" ".join(flags) if flags else "none"}')
+
+    def flag_present(f: str) -> bool:
+        if f.startswith('-'):
+            return f in entry.args
+        if f'-{f}' in entry.args:
+            return True
+        if f'--{f}' in entry.args:
+            return True
+        return False
+
     res = True
     for f in flags:
-        if f'-{f}' not in entry.args:
+        if not flag_present(f):
             logger.warning(f'{entry.file}: missing flag \'{f}\'')
             res = False
     return res
@@ -600,6 +609,7 @@ TEST_ENTRY = CdbEntry(file='/path/to/src/file.c',
                           'yyy',
                           '-Irelative/include',
                           '-I/path/to/src/include',
+                          '--sysroot=/path/to/toolchain/include',
                       ],
                       out_file='/path/to/build/CMakeFiles/lib.dir/src/file.c.o')
 
@@ -632,17 +642,28 @@ def test_normalize_trim_path():
     assert e.compiler.startswith(PATH_REPLACEMENT + '/compiler')
     assert e.out_file.startswith(PATH_REPLACEMENT + '/build/')
 
-    assert e.args[-2] == '-Irelative/include'
-    assert e.args[-1] == f'-I{PATH_REPLACEMENT}/src/include'
+    assert e.args[-3] == '-Irelative/include'
+    assert e.args[-2] == f'-I{PATH_REPLACEMENT}/src/include'
+    assert e.args[-1] == f'--sysroot={PATH_REPLACEMENT}/toolchain/include'
 
 
-def test_check_flags():
+def test_check_flags_no_prefix():
 
     assert check_flags(TEST_ENTRY, [])
     assert check_flags(TEST_ENTRY, ['A2'])
     assert check_flags(TEST_ENTRY, ['A1', 'A2'])
 
     assert not check_flags(TEST_ENTRY, ['A1', 'A7'])
+
+    assert check_flags(TEST_ENTRY, ['sysroot=/path/to/toolchain/include'])
+
+
+def test_check_flags_with_prefix():
+
+    assert check_flags(TEST_ENTRY, ['-A1', '-A2'])
+
+    assert check_flags(TEST_ENTRY, ['--sysroot=/path/to/toolchain/include'])
+    assert not check_flags(TEST_ENTRY, ['-sysroot=/path/to/toolchain/include'])
 
 
 def test_in_files():
