@@ -228,23 +228,24 @@ class Config:
 
 def get_flags_by_compiler(cfg: Config, comp: str) -> List[str]:
     """
-    Fetch all flags for a specific compiler with joining
-    the common and the the predefined flags from the configuration.
+    Fetch compiler specific flags from the predefined set in configuration.
 
     Args:
         cfg: Config
         comp: Compiler property of a CdbEntry
 
     Returns:
-        List[str]: Flags, the value of cfg.flags and cfg.flags_by_compiler[name]
-                   if the configured name matches `comp`.
+        List[str]: Flags, the value of
+                   - cfg.flags_by_compiler[name] if the configured name matches `comp`, or
+                   - cfg.flags_by_compiler[WILDCARD] if present, or
+                   - empty
     """
     comp_path = PurePath(comp.removeprefix(PATH_REPLACEMENT))
     for k, v in cfg.flags_by_compiler.items():
         assert isinstance(v, list)
         if k != WILDCARD and comp_path.match(k):
-            return dedup(cfg.flags + v)
-    return dedup(cfg.flags + cfg.flags_by_compiler.get(WILDCARD, []))
+            return v
+    return cfg.flags_by_compiler.get(WILDCARD, [])
 
 
 def check_cdb(cdb: List[CdbEntry],
@@ -287,8 +288,8 @@ def check_cdb(cdb: List[CdbEntry],
         if dump:
             dump_entry(e)
         else:
-            flags = get_flags_by_compiler(cfg, e.compiler)
-            if not check_flags(e, flags):
+            flags = cfg.flags + get_flags_by_compiler(cfg, e.compiler)
+            if not check_flags(e, dedup(flags)):
                 all_ok = False
 
     return all_ok
@@ -592,6 +593,7 @@ def test_get_flags_by_compiler():
 
     def check(ref: List[str], flags: List[str]):
         assert all(f in flags for f in ref)
+        assert len(ref) == len(flags)
 
     assert not get_flags_by_compiler(Config(), '')
     assert not get_flags_by_compiler(Config(), 'gcc-5')
@@ -605,31 +607,25 @@ def test_get_flags_by_compiler():
                      'bin/g*-11': ['D11', 'E11'],
                  })
 
-    assert get_flags_by_compiler(CFG, '') == DEF
-    assert get_flags_by_compiler(CFG, 'gcc-4') == DEF
+    assert not get_flags_by_compiler(CFG, '')
+    assert not get_flags_by_compiler(CFG, 'gcc-4')
 
     f = get_flags_by_compiler(CFG, 'gcc-5')
-    check(CFG.flags, f)
     check(CFG.flags_by_compiler['gcc-5'], f)
-    assert len(f) == len(CFG.flags) + len(CFG.flags_by_compiler['gcc-5']) - 1
 
     f = get_flags_by_compiler(CFG, 'g++-8')
-    check(CFG.flags, f)
     check(CFG.flags_by_compiler['g*-8'], f)
 
     f = get_flags_by_compiler(CFG, '/usr/bin/gcc-11')
-    check(CFG.flags, f)
     check(CFG.flags_by_compiler['bin/g*-11'], f)
 
     CFG_WITH_DEFAULTS = update_config(CFG, {'flags_by_compiler': {'*': ['Fall']}})
 
     f = get_flags_by_compiler(CFG_WITH_DEFAULTS, 'g++-8')
-    check(CFG_WITH_DEFAULTS.flags, f)
     check(CFG_WITH_DEFAULTS.flags_by_compiler['g*-8'], f)
     assert 'Fall' not in f
 
     f = get_flags_by_compiler(CFG_WITH_DEFAULTS, 'gcc-4')
-    check(CFG_WITH_DEFAULTS.flags, f)
     check(CFG_WITH_DEFAULTS.flags_by_compiler['*'], f)
 
 
