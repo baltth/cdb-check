@@ -234,6 +234,14 @@ the specification with any custom non-existing flag:
   }
 ```
 
+Presets of 'libraries' can be added by the same method:
+```json
+  "flags_by_library": {
+    "lib": ["DLIB_DEFINE=1", "pedantic"]
+  }
+```
+
+
 ## Planned features:
 
 - preset flag lists in configuration for libraries and files

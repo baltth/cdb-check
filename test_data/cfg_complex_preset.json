@@ -1,0 +1,10 @@
+{
+  "base_dirs": ["/path/to/project/prj", "/path/to/toolchains"],
+  "flags": ["Wall", "Wextra", "g", "I[...]/include"],
+  "flags_by_compiler": {
+    "aarch64-oe-linux-*": ["finline-limit=64", "D__ARM_PCS_VFP"]
+  },
+  "flags_by_library": {
+    "lib": ["DLIB_DEFINE=1", "pedantic"]
+  }
+}
