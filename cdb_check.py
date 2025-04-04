@@ -246,6 +246,8 @@ def check_flags(entry: CdbEntry, flags: List[str]) -> bool:
         if not flag_present(f):
             logging.getLogger().warning(f'{entry.file}: missing flag \'{f}\'')
             res = False
+    if res:
+        logging.getLogger().debug('All flags found')
     return res
 
 
@@ -339,8 +341,12 @@ def select_preset(presets: Dict[str, List[str]], predicate: Callable[[str], bool
     for k, v in presets.items():
         assert isinstance(v, list)
         if k != WILDCARD and predicate(k):
+            logging.getLogger().debug(f'  ... matching: {k}')
             return v
-    return presets.get(WILDCARD, [])
+    if WILDCARD in presets:
+        logging.getLogger().debug(f'  ... matching: {WILDCARD}')
+        return presets[WILDCARD]
+    return []
 
 
 def get_flags_by_compiler(cfg: Config, comp: str) -> List[str]:
@@ -357,6 +363,7 @@ def get_flags_by_compiler(cfg: Config, comp: str) -> List[str]:
                    - cfg.flags_by_compiler[WILDCARD] if present, or
                    - empty
     """
+    logging.getLogger().debug('Checking for flag preset by compiler ...')
     comp_path = PurePath(comp.removeprefix(PATH_REPLACEMENT))
     return select_preset(cfg.flags_by_compiler, lambda x: comp_path.match(x))
 
@@ -375,6 +382,7 @@ def get_flags_by_library(cfg: Config, out_file: str) -> List[str]:
                    - cfg.flags_by_library[WILDCARD] if present, or
                    - empty
     """
+    logging.getLogger().debug('Checking for flag preset by library ...')
     return select_preset(cfg.flags_by_library, lambda x: in_libraries(out_file, x))
 
 
@@ -392,10 +400,11 @@ def get_flags_by_file(cfg: Config, file: str) -> List[str]:
                    - cfg.flags_by_file[WILDCARD] if present, or
                    - empty
     """
+    logging.getLogger().debug('Checking for flag preset by file name ...')
     return select_preset(cfg.flags_by_file, lambda x: in_files(file, x))
 
 
-def check_entry(entry: CdbEntry, cfg: Config) -> bool:
+def check_entry(entry: CdbEntry, cfg: Config, dump: bool = False) -> bool:
     """
     Perform flag check on a CdbEntry by flags fetched from the configuration.
 
@@ -404,7 +413,7 @@ def check_entry(entry: CdbEntry, cfg: Config) -> bool:
     """
 
     logger = logging.getLogger()
-    logger.debug(f'Checking {entry.file}')
+    logger.debug(f'Entry {entry.file} ...')
 
     to_check = cfg.flags \
         + get_flags_by_compiler(cfg, entry.compiler) \
@@ -412,7 +421,11 @@ def check_entry(entry: CdbEntry, cfg: Config) -> bool:
         + get_flags_by_file(cfg, entry.file)
     to_check = dedup(to_check)
 
-    logger.debug(f'  expecting {" ".join(to_check) if to_check else "none"}')
+    if dump:
+        dump_entry(entry)
+        return True
+
+    logger.debug(f'Expecting {" ".join(to_check) if to_check else "none"}')
 
     check_consistency(entry)
 
@@ -453,14 +466,9 @@ def check_cdb(cdb: List[CdbEntry],
     qualifier = ' matching' if filtered else ''
     logger.info(f'Checking {len(cdb)}{qualifier} entries(s) ...')
 
-    if dump:
-        for e in cdb:
-            dump_entry(e)
-        return True
-
     all_ok = True
     for e in cdb:
-        if not check_entry(e, cfg):
+        if not check_entry(e, cfg, dump=dump):
             all_ok = False
 
     return all_ok
@@ -546,6 +554,7 @@ def arg_parser() -> argparse.ArgumentParser:
     Create CLI argument parser.
     """
     parser = argparse.ArgumentParser()
+    parser.description = "Tool to verify C/C++ build configuration. See README.md for details."
     parser.add_argument('input', help='Compile DB file (compile_commands.json)')
     parser.add_argument('-c', '--config', help='Config file')
     parser.add_argument('-f', '--flags', nargs='+', help='Flags to check, passed without \'-\' prefix')
@@ -558,7 +567,6 @@ def arg_parser() -> argparse.ArgumentParser:
                         help='Path prefixes to remove, either absolute or relative to $PWD')
     parser.add_argument('-d', '--dump', action='store_true', help='Dump entries to check')
     parser.add_argument('-v', '--verbose', action='store_true', help='Verbose logging')
-    parser.description = "Tool to verify C/C++ build configuration. See README.md for details."
     parser.epilog = """
 Notes about --libraries option:
 
@@ -617,12 +625,13 @@ def main():
     args = arg_parser().parse_args()
     cfg = configure(args)
 
-    configure_logging(args.dump or args.verbose)
+    configure_logging(args.verbose)
     logger = logging.getLogger()
 
-    if args.dump:
+    if args.verbose:
+        logger.debug('cdb-check - running in verbose mode')
         logger.debug('Configuration:')
-        print(asdict(cfg))
+        logger.debug(asdict(cfg))
 
     if process(args.input,
                cfg=cfg,
