@@ -20,6 +20,6 @@ jobs:
           pip install pytest
       - name: Test with pytest
         run: |
-          pytest *.py --doctest-modules --junitxml=junit/test-results.xml
+          pytest test_*.py --junitxml=junit/test-results.xml
       - name: Test tool
         run: ./test_data/run_examples.sh
