@@ -590,17 +590,23 @@ def configure(args: argparse.Namespace) -> Config:
     return merge_config(cfg, args)
 
 
-def configure_logging(verbose: bool):
+def configure_logging(use_debug: bool):
 
-    logging.basicConfig(
-        format='[{levelname:.1}] {message}',
-        style='{',
-        level=logging.DEBUG,
-        stream=sys.stderr,
-    )
+    class StdoutFilter(logging.Filter):
+        def filter(self, record):
+            return record.levelno < logging.WARNING
+
+    stdout_handler = logging.StreamHandler(sys.stdout)
+    stderr_handler = logging.StreamHandler(sys.stderr)
+    stdout_handler.addFilter(StdoutFilter())
+    stdout_handler.setLevel(logging.DEBUG)
+    stderr_handler.setLevel(logging.WARNING)
 
     logger = logging.getLogger()
-    if verbose:
+    logger.addHandler(stdout_handler)
+    logger.addHandler(stderr_handler)
+
+    if use_debug:
         logger.setLevel(logging.DEBUG)
     else:
         logger.setLevel(logging.INFO)
