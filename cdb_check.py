@@ -8,11 +8,12 @@ Usage: see `cdb_check.py -h` for details.
 
 from dataclasses import dataclass, field, fields, asdict
 from pathlib import PurePath, Path
-from typing import List, Dict, Union, Callable
+from typing import List, Dict, Union, Tuple, Callable
 import argparse
 import copy
 import json
 import logging
+import re
 import sys
 
 
@@ -31,6 +32,7 @@ class CdbEntry:
     file: str
     compiler: str
     args: List[str]
+    orig_args: List[str] = field(default_factory=list)
     directory: str = ''
     out_file: str = ''
 
@@ -56,13 +58,13 @@ def to_entry(command: Dict[str, str]) -> CdbEntry:
     try:
         ix = cmd.index(OUT_FLAG)
         out_file = cmd[ix + 1]
-    except:
+    except Exception:
         out_file = ''
         assert False
-
+    args = cmd[1:]
     return CdbEntry(file=command['file'],
                     compiler=cmd[0],
-                    args=cmd[1:],
+                    args=args,
                     out_file=out_file,
                     directory=command['directory'].removesuffix('/'))
 
@@ -113,7 +115,7 @@ def normalize(entry: CdbEntry,
     """
     Normalize a CdbEntry with:
     - dropping 'output' and 'input' arguments of the command
-    - TODO: remove path prefixes from all fields
+    - removing path prefixes from all fields
     """
 
     base_dirs = normalize_base_dirs(base_dirs)
@@ -142,7 +144,80 @@ def normalize(entry: CdbEntry,
                     directory=remove_prefix(entry.directory),
                     compiler=remove_prefix(entry.compiler),
                     args=[remove_substr(a) for a in args],
+                    orig_args=args,
                     out_file=remove_prefix(entry.out_file))
+
+
+def is_disabler(flag: str) -> bool:
+    return len(flag) > 5 and flag[:5].endswith('no-')
+
+
+def make_enabler(flag: str) -> str:
+    return flag[:2] + flag[5:] if is_disabler(flag) else flag
+
+
+def collect_flags_by_keys(flags: List[str]) -> Dict[str, List[str]]:
+    """
+    Collect flags by the logical option they represent.
+    """
+    def key_of(f: str):
+        m = re.search(r'^(--?[a-zA-Z][a-zA-Z0-9_-]*=)', f)
+        key = f'{m.group(1)}...' if m else f
+        if key.startswith('-O'):
+            return '-O...'
+        if re.search(r'^-g[\d]?$', key):
+            return '-g...'
+        return make_enabler(key)
+
+    res: Dict[str, List[str]] = {}
+    for f in flags:
+        key = key_of(f)
+        if key in res.keys():
+            res[key].append(f)
+        else:
+            res[key] = [f]
+    return res
+
+
+def get_duplicates(flags: List[str]) -> int:
+    return len(flags) - len(set(flags))
+
+
+def has_contradiction(flags: List[str]) -> bool:
+    if len(flags) < 2:
+        return False
+    enablers: List[str] = []
+    disablers: List[str] = []
+    for f in flags:
+        if is_disabler(f):
+            disablers.append(make_enabler(f))
+        else:
+            enablers.append(f)
+    return not set(enablers).isdisjoint(set(disablers))
+
+
+def check_consistency_of_collected(flags_by_keys: Dict[str, List[str]]) -> Tuple[List[str], List[str]]:
+
+    contra: List[str] = []
+    duplicates: List[str] = []
+    for k, v in flags_by_keys.items():
+        dup = get_duplicates(v)
+        if has_contradiction(v):
+            contra.append(k)
+        elif dup > 0:
+            duplicates.append(k)
+    return contra, duplicates
+
+
+def check_consistency(entry: CdbEntry) -> bool:
+
+    flags_by_keys = collect_flags_by_keys(entry.orig_args)
+    contra, dup = check_consistency_of_collected(flags_by_keys)
+    for f in contra:
+        logging.getLogger().warning(f'{entry.file}: contradicting options of {f}')
+    for f in dup:
+        logging.getLogger().warning(f'{entry.file}: duplicate(s) found of {f}')
+    return not contra and not dup
 
 
 def check_flags(entry: CdbEntry, flags: List[str]) -> bool:
@@ -156,9 +231,6 @@ def check_flags(entry: CdbEntry, flags: List[str]) -> bool:
     TODO:
         - support MSVC arguments
     """
-    logger = logging.getLogger()
-    logger.debug(f'Checking {entry.file}')
-    logger.debug(f'  expecting {" ".join(flags) if flags else "none"}')
 
     def flag_present(f: str) -> bool:
         if f.startswith('-'):
@@ -172,7 +244,7 @@ def check_flags(entry: CdbEntry, flags: List[str]) -> bool:
     res = True
     for f in flags:
         if not flag_present(f):
-            logger.warning(f'{entry.file}: missing flag \'{f}\'')
+            logging.getLogger().warning(f'{entry.file}: missing flag \'{f}\'')
             res = False
     return res
 
@@ -230,7 +302,7 @@ def dump_entry(e: CdbEntry):
     if e.out_file:
         print(f'  to file {e.out_file}')
     if e.args:
-        print(f'  with args')
+        print('  with args')
         print(ARG_PREFIX + ('\n' + ARG_PREFIX).join(e.args))
 
 
@@ -331,12 +403,20 @@ def check_entry(entry: CdbEntry, cfg: Config) -> bool:
         bool: True if all flags are present in the compilation.
     """
 
-    flags = cfg.flags \
+    logger = logging.getLogger()
+    logger.debug(f'Checking {entry.file}')
+
+    to_check = cfg.flags \
         + get_flags_by_compiler(cfg, entry.compiler) \
         + get_flags_by_library(cfg, entry.out_file) \
         + get_flags_by_file(cfg, entry.file)
+    to_check = dedup(to_check)
 
-    return check_flags(entry, dedup(flags))
+    logger.debug(f'  expecting {" ".join(to_check) if to_check else "none"}')
+
+    check_consistency(entry)
+
+    return check_flags(entry, to_check)
 
 
 def check_cdb(cdb: List[CdbEntry],

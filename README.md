@@ -39,6 +39,8 @@ See `./cdb-check-py -h`
   - CLI arguments are extending the configuration if present
     to create custom scenarios easily
   - automatically applied flag presets in config file
+- check the consistency of the CDB, e.g. look for flag duplicates
+  and contradicting flags
 - dump the loaded and filtered CDB for debugging
 
 ## How to use?

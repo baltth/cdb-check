@@ -97,6 +97,88 @@ def test_normalize_trim_path():
     assert e.args[-1] == f'--sysroot={PATH_REPLACEMENT}/toolchain/include'
 
 
+def test_is_disabler():
+
+    assert not is_disabler('-I/p/t/x')
+    assert not is_disabler('-g')
+    assert not is_disabler('-Werror')
+    assert is_disabler('-Wno-error')
+
+
+def test_make_enabler():
+
+    assert make_enabler('-Werror') == '-Werror'
+    assert make_enabler('-Wno-error') == '-Werror'
+
+
+def test_collect_flags_by_keys_basic():
+
+    c = collect_flags_by_keys(['-a', '-b', '-c'])
+    assert {'-a', '-b', '-c'} == set(c.keys())
+    for k, v in c.items():
+        assert v == [k]
+
+
+def test_collect_flags_by_keys_special():
+
+    c = collect_flags_by_keys(['-O1', '-O2', '-Ww=12', '--Ww=13', '-g3'])
+    assert {'-O...', '-Ww=...', '--Ww=...', '-g...'} == set(c.keys())
+    assert c['-O...'] == ['-O1', '-O2']
+    assert c['-Ww=...'] == ['-Ww=12']
+    assert c['-g...'] == ['-g3']
+
+
+def test_collect_flags_by_keys_disablers():
+
+    c = collect_flags_by_keys(['-fa', '-fno-a', '-fa'])
+    assert {'-fa'} == set(c.keys())
+    assert c['-fa'] == ['-fa', '-fno-a', '-fa']
+
+
+def test_get_duplicates():
+
+    assert get_duplicates(['-Wall']) == 0
+    assert get_duplicates(['-Wall', '-Wall']) == 1
+    assert get_duplicates(['-Wall', '-Wno-all']) == 0
+    assert get_duplicates(['-Wall', '-Wno-all'] * 2) == 2
+
+
+def test_has_contradiction():
+
+    assert not has_contradiction(['-Wall'])
+    assert not has_contradiction(['-Wall', '-Wall'])
+    assert has_contradiction(['-Wall', '-Wno-all'])
+    assert has_contradiction(['-Wno-all', '-Wall'])
+    assert has_contradiction(['-Wno-all', '-Wall', '-Wno-all'])
+
+
+def test_check_consistency_of_collected():
+
+    FLAGS = [
+        '-Werror',
+        '-fomit-frame-pointer',
+        '-Wno-error=unused-result',
+        '-I/p/t/i',
+        '-I/p/t/i2',
+        '-fno-omit-frame-pointer',
+        '-fomit-frame-pointer',
+        '-I/p/t/i',
+        '-Werror',
+        '-O1',
+        '-Os',
+        '-g',
+        '-g1',
+        '--sysroot=/p/t/sr',
+        '--sysroot=/p/t/sr',
+    ]
+
+    COLLECTED = collect_flags_by_keys(FLAGS)
+
+    contra, dup = check_consistency_of_collected(COLLECTED)
+    assert contra == ['-fomit-frame-pointer']   # TODO add support for -O1 vs -Os
+    assert dup == ['-Werror', '-I/p/t/i', '--sysroot=...']
+
+
 def test_check_flags_no_prefix():
 
     assert check_flags(TEST_ENTRY, [])
