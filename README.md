@@ -262,17 +262,16 @@ All flags found
 
 #### Property matching methods
 
-Compilers and compile units are matched with
-[pathlib.PurePath.match()](https://docs.python.org/3/library/pathlib.html#pathlib.PurePath.match).
+Compilers and compile units are matched with either
+a _full lexical match_ on the last path segment (i.e. the name of
+the executable), or a method compatible with
+(`pathlib` pattern language)[https://docs.python.org/3/library/pathlib.html#pathlib-pattern-language].
 This supports
+  - `**` as recursive wildcard
   - `*` for parts of a file or directory segment or a full segment
   - `?` for one non-separator character
   - `[seq]` for one character in 'seq'
   - `[!seq]` for one character _not_ in 'seq'
-
-Note that _recursive wildcards_ (`**`) are not supported.
-The path is matched from the left if absolute, otherwise
-it's matched from the right.
 
 Libraries are matched with specialized substring lookups.
 A compilation is considered part of the library `LIB`

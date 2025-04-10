@@ -3,6 +3,141 @@
 from cdb_check import *
 
 
+def test_path_wildcards_to_regex():
+
+    assert path_wildcards_to_regex('') == ''
+    assert path_wildcards_to_regex('abc/cde') == 'abc/cde'
+    assert path_wildcards_to_regex('abc+/.cde/(a)') == 'abc\\+/\\.cde/\\(a\\)'
+
+    assert path_wildcards_to_regex('abc/*') == 'abc/[^/]+'
+    assert path_wildcards_to_regex('abc/*/b.c') == 'abc/[^/]+/b\\.c'
+    assert path_wildcards_to_regex('abc/*.cpp') == 'abc/[^/]*\\.cpp'
+    assert path_wildcards_to_regex('abc/*/b.*') == 'abc/[^/]+/b\\.[^/]*'
+
+    assert path_wildcards_to_regex('abc/**') == 'abc(/.+)?'
+    assert path_wildcards_to_regex('abc/**/c') == 'abc(/.+)?/c'
+    assert path_wildcards_to_regex('abc/**/b/**') == 'abc(/.+)?/b(/.+)?'
+    assert path_wildcards_to_regex('**/a') == '(.+)?/a'
+    assert path_wildcards_to_regex('**') == '(.+)?'
+
+    assert path_wildcards_to_regex('ab?/a') == 'ab[^/]/a'
+
+    assert path_wildcards_to_regex('abc/[cd]e') == 'abc/[cd]e'
+    assert path_wildcards_to_regex('abc/[?]e/f[!]') == 'abc/[\\?]e/f[!]'
+
+    assert path_wildcards_to_regex('abc/[!cd]e') == 'abc/[^cd]e'
+    assert path_wildcards_to_regex('abc/[!?]e/f[!!]') == 'abc/[^\\?]e/f[^!]'
+
+
+def test_match_path_basic():
+
+    assert not match_path('', 'abc')
+    assert match_path('abc/cde', 'abc/cde')
+    assert not match_path('abc/cde', 'abc/cdef')
+
+    assert match_path('cde', 'abs/cde')
+    assert not match_path('de', 'abs/cde')
+    assert not match_path('/cde', 'abs/cde')
+
+    assert match_path('abc+/.cde/(a)', 'abc+/.cde/(a)')
+
+
+def test_match_path_prefixed():
+
+    assert match_path('abc/cde', '[...]abc/cde')
+    assert match_path('abc/cde', '[...]/abc/cde')
+
+
+def test_match_path_wildcard_segment():
+
+    r = 'abc/*'
+
+    assert match_path(r, 'abc/a.c')
+    assert match_path(r, 'abc/b')
+    assert not match_path(r, 'abc/')
+    assert not match_path(r, 'abc/b/b.c')
+
+    r = 'abc/*/b.c'
+
+    assert not match_path(r, 'abc/a.c')
+    assert not match_path(r, 'abc/b.c')
+    assert not match_path(r, 'abc/')
+    assert match_path(r, 'abc/b/b.c')
+    assert match_path(r, 'abc/bcd/b.c')
+    assert not match_path(r, 'abc/bcd/def/b.c')
+
+
+def test_match_path_wildcard_part():
+
+    r = 'abc/*.cpp'
+
+    assert match_path(r, 'abc/.cpp')
+    assert match_path(r, 'abc/a.cpp')
+    assert match_path(r, 'abc/a.b.cpp')
+    assert not match_path(r, 'abc/a.c')
+    assert not match_path(r, 'abc/b/a.cpp')
+    assert not match_path(r, 'abc/a.cpp/a.cpp')
+
+
+def test_match_path_recursive_wildcard():
+
+    r = 'abc/**'
+
+    assert match_path(r, 'abc/b/c.py')
+    assert match_path(r, 'abc/d.py')
+    assert match_path(r, 'abc/b/c/e.py')
+
+    r = 'abc/**/c'
+
+    assert match_path(r, 'abc/c')
+    assert match_path(r, 'abc/b/c')
+    assert match_path(r, 'abc/b/c/c')
+    assert not match_path(r, 'abc/b/c/d')
+
+    r = 'abc/**/b/**'
+
+    assert match_path(r, 'abc/b')
+    assert match_path(r, 'abc/b/a')
+    assert match_path(r, 'abc/x/b')
+    assert match_path(r, 'abc/x/b/c/d')
+
+
+def test_match_path_any_char():
+
+    r = 'ab?/a'
+
+    assert match_path(r, 'abc/a')
+    assert match_path(r, 'abd/a')
+    assert not match_path(r, 'abde/a')
+    assert not match_path(r, 'ab/a')
+
+
+def test_match_path_char_set():
+
+    r = 'abc/[cd]e'
+
+    assert match_path(r, 'abc/de')
+    assert not match_path(r, 'abc/ee')
+
+    r = 'abc/[?]e/f[!]'
+
+    assert match_path(r, 'abc/?e/f!')
+
+
+def test_match_path_negative_char_set():
+
+    r = 'abc/[!cd]e'
+
+    assert not match_path(r, 'abc/de')
+    assert match_path(r, 'abc/ee')
+
+    r = 'abc/[!?]e/f[!!]'
+
+    assert not match_path(r, 'abc/?e/fe')
+    assert not match_path(r, 'abc/ee/f!')
+    assert match_path(r, 'abc/ee/fe')
+
+
 def test_dedup():
     assert dedup([1, 1, 2, 1, 2, 3]) == [1, 2, 3]
 
@@ -30,11 +165,11 @@ def test_replace_path_prefix():
     WORK_DIR = '/work'
     BASE_DIRS = ['/abs/path', '/work/path']
 
-    assert replace_path_prefix(BASE_DIRS[0], WORK_DIR, BASE_DIRS) == PATH_REPLACEMENT
-    assert replace_path_prefix(BASE_DIRS[1], WORK_DIR, BASE_DIRS) == PATH_REPLACEMENT
+    assert replace_path_prefix(BASE_DIRS[0], WORK_DIR, BASE_DIRS) == '[...]'
+    assert replace_path_prefix(BASE_DIRS[1], WORK_DIR, BASE_DIRS) == '[...]'
 
-    assert replace_path_prefix('/abs/path/to/file', WORK_DIR, BASE_DIRS) == PATH_REPLACEMENT + '/to/file'
-    assert replace_path_prefix('path/to/file', WORK_DIR, BASE_DIRS) == PATH_REPLACEMENT + '/to/file'
+    assert replace_path_prefix('/abs/path/to/file', WORK_DIR, BASE_DIRS) == '[...]/to/file'
+    assert replace_path_prefix('path/to/file', WORK_DIR, BASE_DIRS) == '[...]/to/file'
     assert replace_path_prefix('other/path/to/file', WORK_DIR, BASE_DIRS) == '/work/other/path/to/file'
 
 
@@ -87,14 +222,15 @@ def test_normalize_trim_path():
 
     e = normalize(TEST_ENTRY, ['/path/to'])
 
-    assert e.file.startswith(PATH_REPLACEMENT + '/src/')
-    assert e.directory == PATH_REPLACEMENT + '/build'
-    assert e.compiler.startswith(PATH_REPLACEMENT + '/compiler')
-    assert e.out_file.startswith(PATH_REPLACEMENT + '/build/')
+    assert e.file.startswith('[...]/src/')
+    assert e.directory == '[...]/build'
+    assert e.compiler.startswith('[...]/compiler')
+    assert e.out_file.startswith('[...]/build/')
 
     assert e.args[-3] == '-Irelative/include'
-    assert e.args[-2] == f'-I{PATH_REPLACEMENT}/src/include'
-    assert e.args[-1] == f'--sysroot={PATH_REPLACEMENT}/toolchain/include'
+    assert e.args[-2] == '-I[...]/src/include'
+
+    assert e.args[-1] == '--sysroot=[...]/toolchain/include'
 
 
 def test_is_disabler():
@@ -209,24 +345,44 @@ def test_check_flags_regex():
     assert not check_flags(TEST_ENTRY, ['#^A', '#^B'])
 
 
-def test_in_files():
+def test_in_files_lexical():
 
-    assert not in_files(TEST_ENTRY, [])
-    assert not in_files(TEST_ENTRY, 'src/file4.c')
+    FILE = '/path/to/src/file.c'
+    FILE_2 = '/path/to/src/file2.c'
 
-    assert in_files(TEST_ENTRY, 'src/file.c')
-    assert in_files(TEST_ENTRY.file, 'src/file.c')
+    assert not in_files(FILE, [])
+    assert not in_files(FILE, 'src/file4.c')
 
-    assert in_files(TEST_ENTRY, ['src/file.c'])
-    assert in_files(TEST_ENTRY, ['src/file.c', 'src/file2.c'])
+    assert in_files(FILE, FILE)
+    assert not in_files(FILE_2, FILE)
 
-    assert in_files(TEST_ENTRY, ['src/*'])
-    assert in_files(TEST_ENTRY, ['*/src/*'])
-    assert not in_files(TEST_ENTRY, ['src2/*'])
+    assert in_files(FILE, 'file.c')
+    assert not in_files(FILE, 'src/file.c')
+    assert in_files(TEST_ENTRY, 'file.c')
 
-    assert in_files(TEST_ENTRY, ['src/*.c'])
-    assert in_files(TEST_ENTRY, ['*.c'])
-    assert not in_files(TEST_ENTRY, ['*.cpp'])
+    assert not in_files(FILE_2, 'file.c')
+    assert in_files(FILE_2, ['file.c', 'file2.c'])
+
+
+def test_in_files_matched():
+
+    FILE = '/path/to/src/file.c'
+
+    assert not in_files(FILE, '*.c')
+    assert not in_files(FILE, '*/file.c')
+    assert in_files(FILE, '**/*.c')
+    assert in_files(FILE, ['**/*.cpp', '**/*.c'])
+
+    assert not in_files(FILE, 'src/*')
+    assert in_files(FILE, '**/src/*')
+
+
+def test_in_files_replaced():
+
+    FILE = '[...]/src/file.c'
+
+    assert in_files(FILE, 'src/file.c')
+    assert in_files(FILE, '*/file.c')
 
 
 def test_in_libraries():
@@ -257,7 +413,7 @@ def test_get_flags_by_compiler():
                  flags_by_compiler={
                      'gcc-5': ['A5', 'Y', 'B5', 'C5'],
                      'g*-8': ['A8', 'B8', 'C8'],
-                     'bin/g*-11': ['D11', 'E11'],
+                     '**/g*-11': ['D11', 'E11'],
                  })
 
     assert not get_flags_by_compiler(CFG, '')
@@ -270,7 +426,7 @@ def test_get_flags_by_compiler():
     check(CFG.flags_by_compiler['g*-8'], f)
 
     f = get_flags_by_compiler(CFG, '/usr/bin/gcc-11')
-    check(CFG.flags_by_compiler['bin/g*-11'], f)
+    check(CFG.flags_by_compiler['**/g*-11'], f)
 
     CFG_WITH_DEFAULTS = update_config(CFG, {'flags_by_compiler': {'*': ['Fall']}})
 
@@ -307,7 +463,7 @@ def test_get_flags_by_library():
 
 TEST_ENTRY_2 = CdbEntry(file='/path/to/src/file2.c',
                         directory='/path/to/build',
-                        compiler='/path/to/compiler/gcc',
+                        compiler='/path/to/compiler/bin/gcc',
                         args=['-A1', '-A2', '-I/path/to/src/include'],
                         out_file='/path/to/build/CMakeFiles/lib.dir/src/file2.c.o')
 
@@ -334,9 +490,9 @@ def test_check_entry():
         flags_by_library={'lib2': ['A2'], '*': ['fail']}))
 
     assert check_entry(TEST_ENTRY_2, cfg=Config(
-        flags_by_file={'file*.c': ['A2'], '*': ['fail']}))
+        flags_by_file={'**/file*.c': ['A2'], '*': ['fail']}))
     assert not check_entry(TEST_ENTRY_2, cfg=Config(
-        flags_by_file={'file*.c': ['A5'], '*': ['fail']}))
+        flags_by_file={'**/file*.c': ['A5'], '*': ['fail']}))
 
 
 TEST_CDB = [TEST_ENTRY, TEST_ENTRY_2, TEST_ENTRY_3]
