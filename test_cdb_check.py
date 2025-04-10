@@ -198,6 +198,17 @@ def test_check_flags_with_prefix():
     assert not check_flags(TEST_ENTRY, ['-sysroot=/path/to/toolchain/include'])
 
 
+def test_check_flags_regex():
+
+    assert check_flags(TEST_ENTRY, ['#A'])
+    assert check_flags(TEST_ENTRY, ['#A[0-9]'])
+    assert not check_flags(TEST_ENTRY, ['#A[a-z]'])
+    assert check_flags(TEST_ENTRY, ['#^-A[\\d]$'])
+
+    assert check_flags(TEST_ENTRY, ['#A', '#^--sys'])
+    assert not check_flags(TEST_ENTRY, ['#^A', '#^B'])
+
+
 def test_in_files():
 
     assert not in_files(TEST_ENTRY, [])

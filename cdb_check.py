@@ -42,6 +42,8 @@ PATH_REPLACEMENT = '[...]'
 
 WILDCARD = '*'
 
+FLAG_REGEX_PREFIX = '#'
+
 
 def dedup(l: List) -> List:
     return list(dict.fromkeys(l).keys())
@@ -233,6 +235,8 @@ def check_flags(entry: CdbEntry, flags: List[str]) -> bool:
     """
 
     def flag_present(f: str) -> bool:
+        if f.startswith(FLAG_REGEX_PREFIX):
+            return any(re.search(f.removeprefix(FLAG_REGEX_PREFIX), a) for a in entry.args)
         if f.startswith('-'):
             return f in entry.args
         if f'-{f}' in entry.args:
