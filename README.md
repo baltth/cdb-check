@@ -147,7 +147,7 @@ Some _common use cases_ for the tool:
 
 - _Use wildcards_ for files to check:
   ```sh
-  $ ./cdb_check.py test_data/cdb.json -b /path/to/project/prj -u '*.cpp' -f pedantic Wall Wextra
+  $ ./cdb_check.py test_data/cdb.json -b /path/to/project/prj -u '**/*.cpp' -f pedantic Wall Wextra
 
   Checking 3 matching entries(s) ...
   OK
@@ -185,9 +185,9 @@ Some _common use cases_ for the tool:
   ```sh
   # Each command runs common checks and
   # - check C++ standard
-  ./cdb_check.py -c test_data/cfg.json test_data/cdb.json -u '*.cpp' -f std=c++11
+  ./cdb_check.py -c test_data/cfg.json test_data/cdb.json -u '**/*.cpp' -f std=c++11
   # - check C standard
-  ./cdb_check.py -c test_data/cfg.json test_data/cdb.json -u '*.c' -f std=c11
+  ./cdb_check.py -c test_data/cfg.json test_data/cdb.json -u '**/*.c' -f std=c11
   # - check for '-pedantic' and definitions in library
   ./cdb_check.py -c test_data/cfg.json test_data/cdb.json -l lib -f DLIB_DEFINE=1
   ```
@@ -223,7 +223,7 @@ for unmatched compilers. This can be used even to enforce
 the specification with any custom non-existing flag:
 ```json
   "flags_by_compiler": {
-    "aarch64-oe-linux-*": ["finline-limit=64", "D__ARM_PCS_VFP"],
+    "**/aarch64-oe-linux-*": ["finline-limit=64", "D__ARM_PCS_VFP"],
     "*": ["fail_as_compiler_has_no_preset"]
   }
 ```
@@ -234,8 +234,8 @@ Presets for 'libraries' or compile units can be added by the same method:
     "lib": ["DLIB_DEFINE=1", "pedantic"]
   },
   "flags_by_file": {
-    "*.c": ["std=c11"],
-    "*.cpp": ["std=c++11"]
+    "**/*.c": ["std=c11"],
+    "**/*.cpp": ["std=c++11"]
   }
 ```
 
@@ -245,16 +245,16 @@ output like
 ```
 cdb-check - running in verbose mode
 Configuration:
-{'base_dirs': ['/path/to/project/prj', '/path/to/toolchains'], 'libraries': [], 'compile_units': [], 'flags': ['Wall', 'Wextra', 'g', 'I[...]/include'], 'verbose': True, 'flags_by_compiler': {'aarch64-oe-linux-*': ['finline-limit=64', 'D__ARM_PCS_VFP']}, 'flags_by_library': {'lib': ['DLIB_DEFINE=1', 'pedantic']}, 'flags_by_file': {'*.c': ['std=c11'], '*.cpp': ['std=c++11', 'pedantic']}, 'extra': {'input': 'test_data/cdb_aarch64.json', 'config': 'test_data/cfg_complex_preset.json', 'dump': False}}
+{'base_dirs': ['/path/to/project/prj', '/path/to/toolchains'], 'libraries': [], 'compile_units': [], 'flags': ['Wall', 'Wextra', 'g', 'I[...]/include'], 'verbose': True, 'flags_by_compiler': {'**/aarch64-oe-linux-*': ['finline-limit=64', 'D__ARM_PCS_VFP']}, 'flags_by_library': {'lib': ['DLIB_DEFINE=1', 'pedantic']}, 'flags_by_file': {'**/*.c': ['std=c11'], '**/*.cpp': ['std=c++11', 'pedantic']}, 'extra': {'input': 'test_data/cdb_aarch64.json', 'config': 'test_data/cfg_complex_preset.json', 'dump': False}}
 Checking test_data/cdb_aarch64.json ...
 Checking 4 entries(s) ...
 Entry [...]/src/lib/file1.cpp ...
 Checking for flag preset by compiler ...
-  ... matching: aarch64-oe-linux-*
+  ... matching: **/aarch64-oe-linux-*
 Checking for flag preset by library ...
   ... matching: lib
 Checking for flag preset by file name ...
-  ... matching: *.cpp
+  ... matching: **/*.cpp
 Expecting Wall Wextra g I[...]/include finline-limit=64 D__ARM_PCS_VFP DLIB_DEFINE=1 pedantic std=c++11
 All flags found
 ...
@@ -286,7 +286,24 @@ if the path of the output file contains either
 Flag matching supports to pass flags without the leading `-` prefix.
 This helps to pass CLI args easier. Because of this flag matching works like
 - match the flag as-is if it's first character is `-`, or
-- check if `-FLAG` or `--FLAG` is present.
+- check if `-FLAG` or `--FLAG` is present, or
+- check as _regex_ if the flag starts with `#`, e.g. `#^-O[^0]$` checks
+  for any `-O` flag except `-O0`
+
+
+#### Health check
+
+The tool automatically detects and reports _duplicate_ and _contradicting_
+compiler options for several cases. For example
+- passing `--sysroot=` multiple times is reported as
+  ```
+  [...]/src/test_c.c: duplicate(s) found of --sysroot=...
+  ```
+- using `-fomit-frame-pointer` and `-fno-omit-frame-pointer` at the same time
+  is reported as
+  ```
+  [...]/src/test_c.c: contradicting options of -fomit-frame-pointer
+  ```
 
 
 ### Configuration

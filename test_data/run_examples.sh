@@ -13,16 +13,16 @@ echo "Dump file ..."
 echo "Dump with base dirs ..."
 ./cdb_check.py test_data/cdb.json -b /path/to/project/prj -u file4.c -d
 echo "Wildcard input ..."
-./cdb_check.py test_data/cdb.json -b /path/to/project/prj -u '*.cpp' -f pedantic Wall Wextra
+./cdb_check.py test_data/cdb.json -b /path/to/project/prj -u '**/*.cpp' -f pedantic Wall Wextra
 echo "Logical libraries ..."
 ./cdb_check.py test_data/cdb.json -b /path/to/project/prj -l lib -f DLIB_DEFINE=1
 
 echo "Config file ..."
 ./cdb_check.py -c test_data/cfg.json test_data/cdb.json
 echo "Check C++ standard..."
-./cdb_check.py -c test_data/cfg.json test_data/cdb.json -u '*.cpp' -f std=c++11
+./cdb_check.py -c test_data/cfg.json test_data/cdb.json -u '**/*.cpp' -f std=c++11
 echo "Check C standard ..."
-./cdb_check.py -c test_data/cfg.json test_data/cdb.json -u '*.c' -f std=c11
+./cdb_check.py -c test_data/cfg.json test_data/cdb.json -u '**/*.c' -f std=c11
 echo "Check library options ..."
 ./cdb_check.py -c test_data/cfg.json test_data/cdb.json -l lib -f pedantic DLIB_DEFINE=1
 
