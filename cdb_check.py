@@ -21,7 +21,112 @@ __author__ = "Balazs Toth"
 __email__ = "baltth@gmail.com"
 __copyright__ = "Copyright 2025, Balazs Toth"
 __license__ = "MIT"
-__version__ = "0.2.0"
+__version__ = "0.3.0"
+
+
+def path_wildcards_to_regex(path: str) -> str:
+    """
+    Transform a string with wildcards to a regex.
+    As `pathlib.PurePath.full_match()` is not available with python 3.12,
+    we're emulating its pattern language with regex.
+    See https://docs.python.org/3/library/pathlib.html#pathlib-pattern-language
+
+    Limitations:
+    - one character match of `/` is not supported, i.e. `[ab/]`
+    - trailing '/' is ignored
+    """
+
+    NON_SEP = '[^/]'
+
+    REC_WILDCARD = '**'
+    REC_WILDCARD_PATTERN = '(/.+)?'
+    REC_WILDCARD_PATTERN_NO_SLASH = '(.+)?'
+
+    WILDCARD = '*'
+    WILDCARD_PATTERN = f'{NON_SEP}*'
+    WILDCARD_DIR_PATTERN = f'{NON_SEP}+'
+
+    ONE_CHAR = '?'
+    ONE_CHAR_PATTERN = NON_SEP
+
+    NOT_IN_CHARS_PATTERN = r'^(\[!(.+)\])'
+    IN_CHARS_PATTERN = r'^(\[(.+)\])'
+
+    assert not re.search(r'\[[^]]*/[^]]*\]', path)  # contains no `/` between `[]`
+    path = path.removesuffix('/')
+
+    # Sequential processing for a path segment
+    def consume(p: str) -> Tuple[str, str]:
+        assert REC_WILDCARD not in p
+        # wildcard as segment part
+        if p.startswith(WILDCARD):
+            return WILDCARD_PATTERN, p.removeprefix(WILDCARD)
+        # any character
+        if p.startswith(ONE_CHAR):
+            return ONE_CHAR_PATTERN, p.removeprefix(ONE_CHAR)
+        # one char not from set
+        r = re.match(NOT_IN_CHARS_PATTERN, p)
+        if r:
+            chars = r.group(2)
+            return f'[^{re.escape(chars)}]', p.removeprefix(r.group(1))
+        # one char from set
+        r = re.match(IN_CHARS_PATTERN, p)
+        if r:
+            chars = r.group(2)
+            return f'[{re.escape(chars)}]', p.removeprefix(r.group(1))
+        # pass other
+        return re.escape(p[0]), p[1:]
+
+    # Process path by segments
+    path_parts = path.split('/')
+    regex_parts: List[str] = []
+    for part in path_parts:
+        if part == REC_WILDCARD:    # segment is recursive wildcard
+            regex_parts.append(REC_WILDCARD_PATTERN)
+        elif part == WILDCARD:      # segment is wildcard
+            regex_parts.append(WILDCARD_DIR_PATTERN)
+        else:                       # process segment sequentially
+            regex = ''
+            while part:
+                r, part = consume(part)
+                regex += r
+            regex_parts.append(regex)
+
+    # Join segments and post-process
+    r = '/'.join(regex_parts)
+    # - remove extra `/` before recursive wildcards, added by join()
+    r = r.replace('/' + REC_WILDCARD_PATTERN, REC_WILDCARD_PATTERN)
+    # - remove `/` of leading recursive wildcard
+    if r.startswith(REC_WILDCARD_PATTERN):
+        r = r.replace(REC_WILDCARD_PATTERN, REC_WILDCARD_PATTERN_NO_SLASH, 1)
+    return r
+
+
+def match_path(ref: str, path: str) -> bool:
+    '''
+    Match path like either by
+    - a method like `pathlib` _pattern language, or
+    - a full match on the last path segment
+
+    The leading _path replacement pattern_ of the check path is ignored.
+
+    As that function is not available with python 3.12,
+    we're emulating its pattern language with regex.
+    See https://docs.python.org/3/library/pathlib.html#pathlib-pattern-language
+
+    Limitations:
+    - one character match of `/` is not supported, i.e. `[ab/]`
+    - trailing '/' of ref is ignored
+    '''
+    if not ref or not path:
+        return False
+
+    # '[...]/' or `[...]` trimmed, a normal leading `/` is kept.
+    p = path.removeprefix(PATH_REPLACEMENT + '/').removeprefix(PATH_REPLACEMENT)
+    if '/' not in ref and p.split('/')[-1] == ref:
+        return True
+    m = re.fullmatch(path_wildcards_to_regex(ref), p)
+    return m is not None
 
 
 @dataclass
@@ -41,6 +146,8 @@ OUT_FLAG = '-o'
 PATH_REPLACEMENT = '[...]'
 
 WILDCARD = '*'
+
+FLAG_REGEX_PREFIX = '#'
 
 
 def dedup(l: List) -> List:
@@ -233,6 +340,8 @@ def check_flags(entry: CdbEntry, flags: List[str]) -> bool:
     """
 
     def flag_present(f: str) -> bool:
+        if f.startswith(FLAG_REGEX_PREFIX):
+            return any(re.search(f.removeprefix(FLAG_REGEX_PREFIX), a) for a in entry.args)
         if f.startswith('-'):
             return f in entry.args
         if f'-{f}' in entry.args:
@@ -268,7 +377,7 @@ def in_files(entry: Union[CdbEntry, str], cu_files: Union[List[str], str]) -> bo
     assert isinstance(entry, str)
     assert isinstance(cu_files, list)
 
-    return any(PurePath(entry).match(f) for f in cu_files)
+    return any(match_path(ref=f, path=entry) for f in cu_files)
 
 
 def in_libraries(entry: Union[CdbEntry, str], libraries: Union[List[str], str]) -> bool:
@@ -364,8 +473,7 @@ def get_flags_by_compiler(cfg: Config, comp: str) -> List[str]:
                    - empty
     """
     logging.getLogger().debug('Checking for flag preset by compiler ...')
-    comp_path = PurePath(comp.removeprefix(PATH_REPLACEMENT))
-    return select_preset(cfg.flags_by_compiler, lambda x: comp_path.match(x))
+    return select_preset(cfg.flags_by_compiler, lambda x: match_path(ref=x, path=comp))
 
 
 def get_flags_by_library(cfg: Config, out_file: str) -> List[str]:
@@ -465,6 +573,11 @@ def check_cdb(cdb: List[CdbEntry],
 
     qualifier = ' matching' if filtered else ''
     logger.info(f'Checking {len(cdb)}{qualifier} entries(s) ...')
+
+    if not cdb:
+        logger.warning('No compilation to check.')
+        logger.warning('Please verify the effective configuration using the -v/--verbose argument.')
+        return False
 
     all_ok = True
     for e in cdb:
