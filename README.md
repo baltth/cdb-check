@@ -262,6 +262,36 @@ All flags found
 
 #### Property matching methods
 
+Flag matching supports to pass flags without the leading `-` prefix.
+This helps to pass CLI args easier. Because of this flag matching works like
+- check if `-FLAG` or `--FLAG` is present if the first character is not `-`, or
+- match the flag as-is if it's first character is `-`, or
+- check as _regex_ if the flag starts with `#`, e.g. `#^-O[^0]$` checks
+  for any `-O` flag except `-O0`
+- negative matching expects a flag to be not present and fails when found.
+  E.g. `!-O0` enforces to not use `-O0`.
+
+These methods can be combined trivially, using precedence
+- _negative_ prefix `!`
+- _regex_ prefix `#`
+- _flag_ or regex
+
+Summarized:
+
+Flag     | Match method
+---------|-------------
+`FLAG`   | Pass if `-FLAG` of `--FLAG` present
+`-FLAG`  | Pass if `-FLAG` present
+`#FLAG`  | Pass if _any flag_ matches regex `FLAG`, i.e. `re.search('FLAG', f)` passes for any `f`
+`!FLAG`  | Pass if `-FLAG` and `--FLAG` _not_ present
+`!-FLAG` | Pass if `-FLAG` _not_ present
+`!#FLAG` | Pass if _no flag_ matches regex `FLAG`, i.e. `re.search('FLAG', f)` fails for each `f`
+
+> Note that regex matching uses _partial matching_ with `re.search()`.
+> This means that `#pedantic` will pass for `-pedantic`, `-Wpedantic` and
+> `-pedantic-errors`. Use `^` and `$` to mark the start and end of flag,
+> don't forget to add the leading `-` in this case: `#^-O[123]$`
+
 Compilers and compile units are matched with either
 a _full lexical match_ on the last path segment (i.e. the name of
 the executable), or a method compatible with
@@ -282,14 +312,6 @@ if the path of the output file contains either
 > More specializations can be added later for
 > build system generators other than CMake. In the meantime
 > just simply use the pattern you have. 
-
-Flag matching supports to pass flags without the leading `-` prefix.
-This helps to pass CLI args easier. Because of this flag matching works like
-- match the flag as-is if it's first character is `-`, or
-- check if `-FLAG` or `--FLAG` is present, or
-- check as _regex_ if the flag starts with `#`, e.g. `#^-O[^0]$` checks
-  for any `-O` flag except `-O0`
-
 
 #### Health check
 

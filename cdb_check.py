@@ -148,6 +148,7 @@ PATH_REPLACEMENT = '[...]'
 WILDCARD = '*'
 
 FLAG_REGEX_PREFIX = '#'
+FLAG_BANNED_PREFIX = '!'
 
 
 def dedup(l: List) -> List:
@@ -327,32 +328,49 @@ def check_consistency(entry: CdbEntry) -> bool:
     return not contra and not dup
 
 
+def check_flag(flag: str, flag_set: List[str]) -> bool:
+    """
+    Check if a flag is present or not present in a flag set.
+
+    - A flag starting with `!` is expected to be not in the set.
+    - A flag starting with `#` is matched as regex
+    - A flag starting with `-` is expected as-is
+    - Otherwise the flag is checked if present prefixed with `-` or `--`
+
+    Returns:
+        bool: True if the flag meets the expectations.
+
+    TODO:
+        - support MSVC arguments
+    """
+    if flag.startswith(FLAG_BANNED_PREFIX):
+        return not check_flag(flag.removeprefix(FLAG_BANNED_PREFIX), flag_set)
+    if flag.startswith(FLAG_REGEX_PREFIX):
+        return any(re.search(flag.removeprefix(FLAG_REGEX_PREFIX), a) for a in flag_set)
+    if flag.startswith('-'):
+        return flag in flag_set
+    if f'-{flag}' in flag_set:
+        return True
+    if f'--{flag}' in flag_set:
+        return True
+    return False
+
+
 def check_flags(entry: CdbEntry, flags: List[str]) -> bool:
     """
-    Check if a set of compile flags is present in a CdbEntry,
+    Check if a set of compile flags is present (or not) in a CdbEntry,
     additionally log errors to stderr.
 
     Returns:
-        bool: True if all flags are present in the compilation.
+        bool: True if all flags meet the expectations.
 
     TODO:
         - support MSVC arguments
     """
 
-    def flag_present(f: str) -> bool:
-        if f.startswith(FLAG_REGEX_PREFIX):
-            return any(re.search(f.removeprefix(FLAG_REGEX_PREFIX), a) for a in entry.args)
-        if f.startswith('-'):
-            return f in entry.args
-        if f'-{f}' in entry.args:
-            return True
-        if f'--{f}' in entry.args:
-            return True
-        return False
-
     res = True
     for f in flags:
-        if not flag_present(f):
+        if not check_flag(f, entry.args):
             logging.getLogger().warning(f'{entry.file}: missing flag \'{f}\'')
             res = False
     if res:
