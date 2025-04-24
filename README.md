@@ -15,6 +15,17 @@ Use it when a compile DB is available, e.g. when using
 > To configure CMake to create a compile DB see
 > [CMAKE_EXPORT_COMPILE_COMMANDS](https://cmake.org/cmake/help/latest/variable/CMAKE_EXPORT_COMPILE_COMMANDS.html)
 
+A short example showing missing flags and inconsistency in compile options:
+```
+$ ./cdb_check.py -c project_cfg.json build/compile_commands.json
+
+Checking 14 entries(s) ...
+[...]/src/file4.c: missing flag 'pedantic'
+[...]/src/file5.cpp: duplicate(s) found of --sysroot=...
+[...]/src/file5.cpp: contradicting options of -fomit-frame-pointer
+[...]/src/file5.cpp: missing flag 'std=c++14'
+```
+
 ## Installation, dependencies
 
 This tool is intended to be a _simple utility script,_ I do not plan to create
@@ -292,10 +303,16 @@ Flag     | Match method
 > `-pedantic-errors`. Use `^` and `$` to mark the start and end of flag,
 > don't forget to add the leading `-` in this case: `#^-O[123]$`
 
+_Path replacement_ also works in regex, there's no need to
+escape `[...]` in the regex expression as it's done automatically by the tool.
+E.g. when expecting a _sysroot_ like `/path/to/replace/compiler-7*`,
+define the flag regex as `#--sysroot=[...]/compiler-7.*`
+(instead of double escaping in JSON like `\\[\\.\\.\\.\\]`)
+
 Compilers and compile units are matched with either
 a _full lexical match_ on the last path segment (i.e. the name of
 the executable), or a method compatible with
-(`pathlib` pattern language)[https://docs.python.org/3/library/pathlib.html#pathlib-pattern-language].
+[`pathlib` pattern language](https://docs.python.org/3/library/pathlib.html#pathlib-pattern-language).
 This supports
   - `**` as recursive wildcard
   - `*` for parts of a file or directory segment or a full segment

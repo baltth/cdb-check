@@ -345,6 +345,17 @@ def test_check_flag_regex():
     assert not check_flag('#^B', TEST_FLAGS)
 
 
+def test_check_flag_path_replacement():
+
+    FLAGS_WITH_PATH_REPLACEMENT = [
+        "-I[...]/include",
+        "--sysroot=[...]/comp-1.2.3"
+    ]
+
+    assert check_flag('I[...]/include', FLAGS_WITH_PATH_REPLACEMENT)
+    assert check_flag('#^--sysroot=[...]/comp-.*', FLAGS_WITH_PATH_REPLACEMENT)
+
+
 def test_check_flag_banned():
 
     assert not check_flag('!A2', TEST_FLAGS)

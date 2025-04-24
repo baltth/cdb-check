@@ -144,6 +144,7 @@ class CdbEntry:
 
 OUT_FLAG = '-o'
 PATH_REPLACEMENT = '[...]'
+PATH_REPLACEMENT_IN_REGEX = re.escape(PATH_REPLACEMENT)
 
 WILDCARD = '*'
 
@@ -346,7 +347,8 @@ def check_flag(flag: str, flag_set: List[str]) -> bool:
     if flag.startswith(FLAG_BANNED_PREFIX):
         return not check_flag(flag.removeprefix(FLAG_BANNED_PREFIX), flag_set)
     if flag.startswith(FLAG_REGEX_PREFIX):
-        return any(re.search(flag.removeprefix(FLAG_REGEX_PREFIX), a) for a in flag_set)
+        normalized_flag = flag.removeprefix(FLAG_REGEX_PREFIX).replace(PATH_REPLACEMENT, PATH_REPLACEMENT_IN_REGEX)
+        return any(re.search(normalized_flag, a) for a in flag_set)
     if flag.startswith('-'):
         return flag in flag_set
     if f'-{flag}' in flag_set:
