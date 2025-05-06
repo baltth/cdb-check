@@ -219,6 +219,15 @@ def normalize_base_dirs(base_dirs: List[str]) -> List[str]:
     return [convert(d) for d in base_dirs]
 
 
+def join_opt_pairs(args: List[str]) -> List[str]:
+    if len(args) < 2:
+        return args
+    if args[1].startswith('-'):
+        return [args[0]] + join_opt_pairs(args[1:])
+    front_joint = [' '.join(args[0:2])] + args[2:]
+    return join_opt_pairs(front_joint)
+
+
 def normalize(entry: CdbEntry,
               base_dirs: List[str] = []) -> CdbEntry:
     """
@@ -229,15 +238,12 @@ def normalize(entry: CdbEntry,
 
     base_dirs = normalize_base_dirs(base_dirs)
 
-    def remove_opt_with_value(args: List[str], arg: str) -> List[str]:
-        try:
-            ix = args.index(arg)
-            assert len(args) >= ix + 1
-            return args[:ix] + args[ix+2:]
-        except ValueError:
-            return args
+    args = join_opt_pairs(entry.args)
 
-    args = remove_opt_with_value(entry.args, '-c')  # remove input argument
+    def remove_opt_with_value(args: List[str], arg: str) -> List[str]:
+        return [a for a in args if not a.startswith(f'{arg} ')]
+
+    args = remove_opt_with_value(args, '-c')  # remove input argument
     args = remove_opt_with_value(args, OUT_FLAG)  # remove object file argument
 
     def remove_prefix(val: str) -> str:

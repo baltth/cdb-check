@@ -173,6 +173,20 @@ def test_replace_path_prefix():
     assert replace_path_prefix('other/path/to/file', WORK_DIR, BASE_DIRS) == '/work/other/path/to/file'
 
 
+def test_join_opt_pairs():
+
+    assert join_opt_pairs([]) == []
+    assert join_opt_pairs(['a']) == ['a']
+    assert join_opt_pairs(['-a']) == ['-a']
+
+    assert join_opt_pairs(['-a', '-b', '-c', '-d']) == ['-a', '-b', '-c', '-d']
+    assert join_opt_pairs(['a', '-b', '-c', '-d']) == ['a', '-b', '-c', '-d']
+
+    assert join_opt_pairs(['-a', '-b', '-c', 'd']) == ['-a', '-b', '-c d']
+    assert join_opt_pairs(['-a', '-b', 'c', '-d']) == ['-a', '-b c', '-d']
+    assert join_opt_pairs(['-a', 'b', 'c', 'd']) == ['-a b c d']
+
+
 def test_normalize_base_dirs():
 
     ABS = '/abs/path'
@@ -191,6 +205,8 @@ TEST_FLAGS = [
     'yyy',
     '-Irelative/include',
     '-I/path/to/src/include',
+    '-isystem',
+    '/path/to/src/include',
     '--sysroot=/path/to/toolchain/include',
 ]
 
@@ -201,13 +217,22 @@ TEST_ENTRY = CdbEntry(file='/path/to/src/file.c',
                       out_file='/path/to/build/CMakeFiles/lib.dir/src/file.c.o')
 
 
+def test_normalize_join_pairs_args():
+
+    e = normalize(TEST_ENTRY)
+    assert '-isystem /path/to/src/include' in e.args
+
+
 def test_normalize_drop_args():
 
     e = normalize(TEST_ENTRY)
 
+    EXPECTED_DROPPED = 4
+    EXPECTED_JOINT = 1
+
     assert e.file == TEST_ENTRY.file
     assert e.compiler == TEST_ENTRY.compiler
-    assert len(e.args) == len(TEST_ENTRY.args) - 4
+    assert len(e.args) == len(TEST_ENTRY.args) - EXPECTED_DROPPED - EXPECTED_JOINT
     assert '-c' not in e.args
     assert 'yyy' not in e.args
 
@@ -215,7 +240,7 @@ def test_normalize_drop_args():
     ENTRY_MISSING_OBJ.args = [a for a in TEST_ENTRY.args if a not in ['-o', 'yyy']]
 
     e2 = normalize(ENTRY_MISSING_OBJ)
-    assert len(e2.args) == len(ENTRY_MISSING_OBJ.args) - 2
+    assert len(e2.args) == len(ENTRY_MISSING_OBJ.args) - 2 - EXPECTED_JOINT
     assert '-c' not in e2.args
     assert 'xxx' not in e2.args
 
@@ -229,8 +254,9 @@ def test_normalize_trim_path():
     assert e.compiler.startswith('[...]/compiler')
     assert e.out_file.startswith('[...]/build/')
 
-    assert e.args[-3] == '-Irelative/include'
-    assert e.args[-2] == '-I[...]/src/include'
+    assert e.args[-4] == '-Irelative/include'
+    assert e.args[-3] == '-I[...]/src/include'
+    assert e.args[-2] == '-isystem [...]/src/include'
 
     assert e.args[-1] == '--sysroot=[...]/toolchain/include'
 
