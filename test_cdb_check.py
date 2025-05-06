@@ -182,20 +182,22 @@ def test_normalize_base_dirs():
     assert bd == [ABS, f'{cwd}/{REL}']
 
 
+TEST_FLAGS = [
+    '-A1',
+    '-c',
+    'xxx',
+    '-A2',
+    '-o',
+    'yyy',
+    '-Irelative/include',
+    '-I/path/to/src/include',
+    '--sysroot=/path/to/toolchain/include',
+]
+
 TEST_ENTRY = CdbEntry(file='/path/to/src/file.c',
                       directory='/path/to/build',
                       compiler='/path/to/compiler/gcc',
-                      args=[
-                          '-A1',
-                          '-c',
-                          'xxx',
-                          '-A2',
-                          '-o',
-                          'yyy',
-                          '-Irelative/include',
-                          '-I/path/to/src/include',
-                          '--sysroot=/path/to/toolchain/include',
-                      ],
+                      args=TEST_FLAGS,
                       out_file='/path/to/build/CMakeFiles/lib.dir/src/file.c.o')
 
 
@@ -315,34 +317,69 @@ def test_check_consistency_of_collected():
     assert dup == ['-Werror', '-I/p/t/i', '--sysroot=...']
 
 
-def test_check_flags_no_prefix():
+def test_check_flag_no_prefix():
+
+    assert not check_flag('', TEST_FLAGS)
+    assert not check_flag('A5', TEST_FLAGS)
+
+    assert check_flag('A2', TEST_FLAGS)
+
+
+def test_check_flag_with_prefix():
+
+    assert check_flag('-A1', TEST_FLAGS)
+    assert check_flag('--sysroot=/path/to/toolchain/include', TEST_FLAGS)
+
+    assert not check_flag('--A1', TEST_FLAGS)
+    assert not check_flag('-sysroot=/path/to/toolchain/include', TEST_FLAGS)
+
+
+def test_check_flag_regex():
+
+    assert check_flag('#A', TEST_FLAGS)
+    assert check_flag('#A[0-9]', TEST_FLAGS)
+    assert not check_flag('#A[a-z]', TEST_FLAGS)
+    assert check_flag('#^-A[\\d]$', TEST_FLAGS)
+
+    assert check_flag('#^--sys', TEST_FLAGS)
+    assert not check_flag('#^B', TEST_FLAGS)
+
+
+def test_check_flag_path_replacement():
+
+    FLAGS_WITH_PATH_REPLACEMENT = [
+        "-I[...]/include",
+        "--sysroot=[...]/comp-1.2.3"
+    ]
+
+    assert check_flag('I[...]/include', FLAGS_WITH_PATH_REPLACEMENT)
+    assert check_flag('#^--sysroot=[...]/comp-.*', FLAGS_WITH_PATH_REPLACEMENT)
+
+
+def test_check_flag_banned():
+
+    assert not check_flag('!A2', TEST_FLAGS)
+    assert check_flag('!A5', TEST_FLAGS)
+
+    assert check_flag('!--A2', TEST_FLAGS)
+    assert not check_flag('!-A2', TEST_FLAGS)
+
+    assert not check_flag('!#A[0-9]', TEST_FLAGS)
+    assert check_flag('!#A[a-z]', TEST_FLAGS)
+
+
+def test_check_flags():
 
     assert check_flags(TEST_ENTRY, [])
     assert check_flags(TEST_ENTRY, ['A2'])
-    assert check_flags(TEST_ENTRY, ['A1', 'A2'])
+    assert check_flags(TEST_ENTRY, ['A1', '-A2'])
 
     assert not check_flags(TEST_ENTRY, ['A1', 'A7'])
 
     assert check_flags(TEST_ENTRY, ['sysroot=/path/to/toolchain/include'])
+    assert check_flags(TEST_ENTRY, ['!#A[a-z]', '#A[0-9]'])
 
-
-def test_check_flags_with_prefix():
-
-    assert check_flags(TEST_ENTRY, ['-A1', '-A2'])
-
-    assert check_flags(TEST_ENTRY, ['--sysroot=/path/to/toolchain/include'])
-    assert not check_flags(TEST_ENTRY, ['-sysroot=/path/to/toolchain/include'])
-
-
-def test_check_flags_regex():
-
-    assert check_flags(TEST_ENTRY, ['#A'])
-    assert check_flags(TEST_ENTRY, ['#A[0-9]'])
-    assert not check_flags(TEST_ENTRY, ['#A[a-z]'])
     assert check_flags(TEST_ENTRY, ['#^-A[\\d]$'])
-
-    assert check_flags(TEST_ENTRY, ['#A', '#^--sys'])
-    assert not check_flags(TEST_ENTRY, ['#^A', '#^B'])
 
 
 def test_in_files_lexical():

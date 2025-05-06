@@ -15,6 +15,17 @@ Use it when a compile DB is available, e.g. when using
 > To configure CMake to create a compile DB see
 > [CMAKE_EXPORT_COMPILE_COMMANDS](https://cmake.org/cmake/help/latest/variable/CMAKE_EXPORT_COMPILE_COMMANDS.html)
 
+A short example showing missing flags and inconsistency in compile options:
+```
+$ ./cdb_check.py -c project_cfg.json build/compile_commands.json
+
+Checking 14 entries(s) ...
+[...]/src/file4.c: missing flag 'pedantic'
+[...]/src/file5.cpp: duplicate(s) found of --sysroot=...
+[...]/src/file5.cpp: contradicting options of -fomit-frame-pointer
+[...]/src/file5.cpp: missing flag 'std=c++14'
+```
+
 ## Installation, dependencies
 
 This tool is intended to be a _simple utility script,_ I do not plan to create
@@ -262,10 +273,46 @@ All flags found
 
 #### Property matching methods
 
+Flag matching supports to pass flags without the leading `-` prefix.
+This helps to pass CLI args easier. Because of this flag matching works like
+- check if `-FLAG` or `--FLAG` is present if the first character is not `-`, or
+- match the flag as-is if it's first character is `-`, or
+- check as _regex_ if the flag starts with `#`, e.g. `#^-O[^0]$` checks
+  for any `-O` flag except `-O0`
+- negative matching expects a flag to be not present and fails when found.
+  E.g. `!-O0` enforces to not use `-O0`.
+
+These methods can be combined trivially, using precedence
+- _negative_ prefix `!`
+- _regex_ prefix `#`
+- _flag_ or regex
+
+Summarized:
+
+Flag     | Match method
+---------|-------------
+`FLAG`   | Pass if `-FLAG` of `--FLAG` present
+`-FLAG`  | Pass if `-FLAG` present
+`#FLAG`  | Pass if _any flag_ matches regex `FLAG`, i.e. `re.search('FLAG', f)` passes for any `f`
+`!FLAG`  | Pass if `-FLAG` and `--FLAG` _not_ present
+`!-FLAG` | Pass if `-FLAG` _not_ present
+`!#FLAG` | Pass if _no flag_ matches regex `FLAG`, i.e. `re.search('FLAG', f)` fails for each `f`
+
+> Note that regex matching uses _partial matching_ with `re.search()`.
+> This means that `#pedantic` will pass for `-pedantic`, `-Wpedantic` and
+> `-pedantic-errors`. Use `^` and `$` to mark the start and end of flag,
+> don't forget to add the leading `-` in this case: `#^-O[123]$`
+
+_Path replacement_ also works in regex, there's no need to
+escape `[...]` in the regex expression as it's done automatically by the tool.
+E.g. when expecting a _sysroot_ like `/path/to/replace/compiler-7*`,
+define the flag regex as `#--sysroot=[...]/compiler-7.*`
+(instead of double escaping in JSON like `\\[\\.\\.\\.\\]`)
+
 Compilers and compile units are matched with either
 a _full lexical match_ on the last path segment (i.e. the name of
 the executable), or a method compatible with
-(`pathlib` pattern language)[https://docs.python.org/3/library/pathlib.html#pathlib-pattern-language].
+[`pathlib` pattern language](https://docs.python.org/3/library/pathlib.html#pathlib-pattern-language).
 This supports
   - `**` as recursive wildcard
   - `*` for parts of a file or directory segment or a full segment
@@ -282,14 +329,6 @@ if the path of the output file contains either
 > More specializations can be added later for
 > build system generators other than CMake. In the meantime
 > just simply use the pattern you have. 
-
-Flag matching supports to pass flags without the leading `-` prefix.
-This helps to pass CLI args easier. Because of this flag matching works like
-- match the flag as-is if it's first character is `-`, or
-- check if `-FLAG` or `--FLAG` is present, or
-- check as _regex_ if the flag starts with `#`, e.g. `#^-O[^0]$` checks
-  for any `-O` flag except `-O0`
-
 
 #### Health check
 
