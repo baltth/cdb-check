@@ -9,6 +9,7 @@ Usage: see `cdb_check.py -h` for details.
 from dataclasses import dataclass, field, fields, asdict
 from pathlib import PurePath, Path
 from typing import List, Dict, Union, Tuple, Callable
+from shlex import split
 import argparse
 import copy
 import json
@@ -161,7 +162,7 @@ def to_entry(command: Dict[str, str]) -> CdbEntry:
     Convert a dictionary loaded from a CDB to a CdbEntry.
     Compiler, compile argument and object file properties are split from the 'command' field.
     """
-    cmd = command['command'].split()
+    cmd = split(command['command'])
     assert len(cmd) >= 2
 
     try:

@@ -146,7 +146,8 @@ def test_to_entry():
 
     RAW_ENTRY = {
         "directory": "/path/to/build",
-        "command": "/usr/bin/gcc-8 -DOPT_1=1 -DOPT_2 -DOPT_3=\\\"quoted\\\" -I/path/to_inc -o out/file.c.o -c src/file.c",
+        "command": "/usr/bin/gcc-8 -DOPT_1=1 -DOPT_2 -DOPT_3=\"quoted text\" "
+                   "-DOPT_4=\\\"quoted text\\\" -I/path/to_inc -o out/file.c.o -c src/file.c",
         "file": "/path/to/src/src.c"
     }
 
@@ -156,6 +157,9 @@ def test_to_entry():
     assert e.directory == '/path/to/build'
     assert e.compiler == RAW_ENTRY['command'].split()[0]
     assert e.args[0] == '-DOPT_1=1'
+    assert e.args[2] == '-DOPT_3=quoted text'
+    assert e.args[3] == '-DOPT_4="quoted'
+    assert e.args[4] == 'text"'
     assert e.args[-1] == 'src/file.c'
     assert e.out_file == 'out/file.c.o'
 
