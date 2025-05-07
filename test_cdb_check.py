@@ -146,7 +146,8 @@ def test_to_entry():
 
     RAW_ENTRY = {
         "directory": "/path/to/build",
-        "command": "/usr/bin/gcc-8 -DOPT_1=1 -DOPT_2 -DOPT_3=\\\"quoted\\\" -I/path/to_inc -o out/file.c.o -c src/file.c",
+        "command": "/usr/bin/gcc-8 -DOPT_1=1 -DOPT_2 -DOPT_3=\"quoted text\" "
+                   "-DOPT_4=\\\"quoted text\\\" -I/path/to_inc -o out/file.c.o -c src/file.c",
         "file": "/path/to/src/src.c"
     }
 
@@ -156,6 +157,9 @@ def test_to_entry():
     assert e.directory == '/path/to/build'
     assert e.compiler == RAW_ENTRY['command'].split()[0]
     assert e.args[0] == '-DOPT_1=1'
+    assert e.args[2] == '-DOPT_3=quoted text'
+    assert e.args[3] == '-DOPT_4="quoted'
+    assert e.args[4] == 'text"'
     assert e.args[-1] == 'src/file.c'
     assert e.out_file == 'out/file.c.o'
 
@@ -171,6 +175,20 @@ def test_replace_path_prefix():
     assert replace_path_prefix('/abs/path/to/file', WORK_DIR, BASE_DIRS) == '[...]/to/file'
     assert replace_path_prefix('path/to/file', WORK_DIR, BASE_DIRS) == '[...]/to/file'
     assert replace_path_prefix('other/path/to/file', WORK_DIR, BASE_DIRS) == '/work/other/path/to/file'
+
+
+def test_join_opt_pairs():
+
+    assert join_opt_pairs([]) == []
+    assert join_opt_pairs(['a']) == ['a']
+    assert join_opt_pairs(['-a']) == ['-a']
+
+    assert join_opt_pairs(['-a', '-b', '-c', '-d']) == ['-a', '-b', '-c', '-d']
+    assert join_opt_pairs(['a', '-b', '-c', '-d']) == ['a', '-b', '-c', '-d']
+
+    assert join_opt_pairs(['-a', '-b', '-c', 'd']) == ['-a', '-b', '-c d']
+    assert join_opt_pairs(['-a', '-b', 'c', '-d']) == ['-a', '-b c', '-d']
+    assert join_opt_pairs(['-a', 'b', 'c', 'd']) == ['-a b c d']
 
 
 def test_normalize_base_dirs():
@@ -191,6 +209,8 @@ TEST_FLAGS = [
     'yyy',
     '-Irelative/include',
     '-I/path/to/src/include',
+    '-isystem',
+    '/path/to/src/include',
     '--sysroot=/path/to/toolchain/include',
 ]
 
@@ -201,13 +221,22 @@ TEST_ENTRY = CdbEntry(file='/path/to/src/file.c',
                       out_file='/path/to/build/CMakeFiles/lib.dir/src/file.c.o')
 
 
+def test_normalize_join_pairs_args():
+
+    e = normalize(TEST_ENTRY)
+    assert '-isystem /path/to/src/include' in e.args
+
+
 def test_normalize_drop_args():
 
     e = normalize(TEST_ENTRY)
 
+    EXPECTED_DROPPED = 4
+    EXPECTED_JOINT = 1
+
     assert e.file == TEST_ENTRY.file
     assert e.compiler == TEST_ENTRY.compiler
-    assert len(e.args) == len(TEST_ENTRY.args) - 4
+    assert len(e.args) == len(TEST_ENTRY.args) - EXPECTED_DROPPED - EXPECTED_JOINT
     assert '-c' not in e.args
     assert 'yyy' not in e.args
 
@@ -215,7 +244,7 @@ def test_normalize_drop_args():
     ENTRY_MISSING_OBJ.args = [a for a in TEST_ENTRY.args if a not in ['-o', 'yyy']]
 
     e2 = normalize(ENTRY_MISSING_OBJ)
-    assert len(e2.args) == len(ENTRY_MISSING_OBJ.args) - 2
+    assert len(e2.args) == len(ENTRY_MISSING_OBJ.args) - 2 - EXPECTED_JOINT
     assert '-c' not in e2.args
     assert 'xxx' not in e2.args
 
@@ -229,8 +258,9 @@ def test_normalize_trim_path():
     assert e.compiler.startswith('[...]/compiler')
     assert e.out_file.startswith('[...]/build/')
 
-    assert e.args[-3] == '-Irelative/include'
-    assert e.args[-2] == '-I[...]/src/include'
+    assert e.args[-4] == '-Irelative/include'
+    assert e.args[-3] == '-I[...]/src/include'
+    assert e.args[-2] == '-isystem [...]/src/include'
 
     assert e.args[-1] == '--sysroot=[...]/toolchain/include'
 
