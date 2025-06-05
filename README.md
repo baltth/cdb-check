@@ -273,7 +273,7 @@ All flags found
 
 #### Property matching methods
 
-Flag matching supports to pass flags without the leading `-` prefix.
+__Flag matching__ supports to pass flags without the leading `-` prefix.
 This helps to pass CLI args easier. Because of this flag matching works like
 - check if `-FLAG` or `--FLAG` is present if the first character is not `-`, or
 - match the flag as-is if it's first character is `-`, or
@@ -309,26 +309,27 @@ E.g. when expecting a _sysroot_ like `/path/to/replace/compiler-7*`,
 define the flag regex as `#--sysroot=[...]/compiler-7.*`
 (instead of double escaping in JSON like `\\[\\.\\.\\.\\]`)
 
-Compilers and compile units are matched with either
+__Compilers and compile units__ are matched with either
 a _full lexical match_ on the last path segment (i.e. the name of
 the executable), or a method compatible with
 [`pathlib` pattern language](https://docs.python.org/3/library/pathlib.html#pathlib-pattern-language).
 This supports
-  - `**` as recursive wildcard
-  - `*` for parts of a file or directory segment or a full segment
-  - `?` for one non-separator character
-  - `[seq]` for one character in 'seq'
-  - `[!seq]` for one character _not_ in 'seq'
+- `**` as recursive wildcard
+- `*` for parts of a file or directory segment or a full segment
+- `?` for one non-separator character
+- `[seq]` for one character in 'seq'
+- `[!seq]` for one character _not_ in 'seq'
 
-Libraries are matched with specialized substring lookups.
-A compilation is considered part of the library `LIB`
-if the path of the output file contains either
-- `/LIB/`, e.g. `/path/to/build/LIB/file.c.o`, or
-- `CMakeFiles/LIB.dir/`, e.g. `/path/to/build/CMakeFiles/LIB.dir/file.c.o`
+__Libraries__ are matched with a specialized version of
+`pathlib`-like matching. Given a library pattern `LIB` using the
+syntax of `pathlib` pattern language, it's considered
+matching if either `/LIB/` or `CMakeFiles/LIB.dir/` is found
+in the path of the output file. Note that _recursive wildcard `**`
+is disallowed_ here.
 
-> More specializations can be added later for
-> build system generators other than CMake. In the meantime
-> just simply use the pattern you have. 
+> Consider a CMake project with library targets `foo-base`, `foo-util` etc.
+> and an executable target `foo`. The pattern `foo-*` will match the libraries
+> but not the executable.
 
 #### Health check
 
@@ -397,7 +398,7 @@ flags += select_preset(cfg.flags_by_file, entry)
 where `select_preset` is a _first-fit_ method with
 fallback to the wildcard `*` preset:
 ```py
-for p in presets:  
+for p in presets:
     if match(entry, p):
         return presets[p]   # select 'p' on match, or
 if '*' presets:

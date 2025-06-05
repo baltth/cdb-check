@@ -425,8 +425,11 @@ def in_libraries(entry: Union[CdbEntry, str], libraries: Union[List[str], str]) 
     assert isinstance(libraries, list)
 
     def match(lib: str) -> bool:
-        l = lib.removeprefix('/').removesuffix('/')
-        return (f'/{l}/' in entry) or (f'CMakeFiles/{lib}.dir' in entry)
+        assert '**' not in lib
+        lib_pattern = path_wildcards_to_regex(lib.removeprefix('/').removesuffix('/'))
+        direct_pattern = f'/{lib_pattern}/'
+        cmake_pattern = f'/CMakeFiles/{lib_pattern}.dir/'
+        return re.search(cmake_pattern, entry) is not None or re.search(direct_pattern, entry) is not None
     return any(match(l) for l in libraries)
 
 

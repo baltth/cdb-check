@@ -464,6 +464,9 @@ def test_in_libraries():
     assert in_libraries(TEST_ENTRY, ['src'])
     assert in_libraries(TEST_ENTRY, ['lib', 'some-other-lib'])
 
+    assert in_libraries(TEST_ENTRY, ['li?'])
+    assert in_libraries(TEST_ENTRY, ['*ib'])
+
 
 def test_get_flags_by_compiler():
 
