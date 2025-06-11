@@ -145,10 +145,10 @@ def test_dedup():
 def test_to_entry():
 
     RAW_ENTRY = {
-        "directory": "/path/to/build",
-        "command": "/usr/bin/gcc-8 -DOPT_1=1 -DOPT_2 -DOPT_3=\"quoted text\" "
-                   "-DOPT_4=\\\"quoted text\\\" -I/path/to_inc -o out/file.c.o -c src/file.c",
-        "file": "/path/to/src/src.c"
+        'directory': '/path/to/build',
+        'command': '/usr/bin/gcc-8 -DOPT_1=1 -DOPT_2 -DOPT_3="quoted text" '
+                   '-DOPT_4=\\"quoted text\\" -I/path/to_inc -o out/file.c.o -c src/file.c',
+        'file': '/path/to/src/src.c'
     }
 
     e = to_entry(RAW_ENTRY)
@@ -160,6 +160,21 @@ def test_to_entry():
     assert e.args[2] == '-DOPT_3=quoted text'
     assert e.args[3] == '-DOPT_4="quoted'
     assert e.args[4] == 'text"'
+    assert e.args[-1] == 'src/file.c'
+    assert e.out_file == 'out/file.c.o'
+
+    RAW_ENTRY_ARG = {
+        'directory': '/path/to/build',
+        'arguments': ['/usr/bin/gcc-8', '-DOPT_1=1', '-DOPT_2', '-DOPT_3=quoted text',
+                      '-DOPT_4="quoted text"', '-I/path/to_inc', '-o', 'out/file.c.o', '-c', 'src/file.c'],
+        'file': '/path/to/src/src.c'
+    }
+
+    e = to_entry(RAW_ENTRY_ARG)
+    assert e.file == RAW_ENTRY_ARG['file']
+    assert e.compiler == RAW_ENTRY_ARG['arguments'][0]
+    assert e.args[2] == '-DOPT_3=quoted text'
+    assert e.args[3] == '-DOPT_4="quoted text"'
     assert e.args[-1] == 'src/file.c'
     assert e.out_file == 'out/file.c.o'
 
