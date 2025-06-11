@@ -12,8 +12,10 @@ useful to ensure consistency of different build configurations.
 Use it when a compile DB is available, e.g. when using
 [CMake](https://cmake.org) or [LLVM](https://clang.llvm.org).
 
-> To configure CMake to create a compile DB see
-> [CMAKE_EXPORT_COMPILE_COMMANDS](https://cmake.org/cmake/help/latest/variable/CMAKE_EXPORT_COMPILE_COMMANDS.html)
+> - To configure CMake to create a compile DB see
+>   [CMAKE_EXPORT_COMPILE_COMMANDS](https://cmake.org/cmake/help/latest/variable/CMAKE_EXPORT_COMPILE_COMMANDS.html)
+> - For build systems and generators not supporting compile database creation check
+>   the [`compiledb`](https://pypi.org/project/compiledb) tool.
 
 A short example showing missing flags and inconsistency in compile options:
 ```
@@ -406,8 +408,3 @@ if '*' presets:
 else:
     return []               # select none
 ```
-
-### Planned features:
-
-- builtin library patterns for non-cmake build system generators
-- maybe add a minimalistic support for makefiles
