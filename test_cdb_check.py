@@ -357,9 +357,17 @@ def test_check_consistency_of_collected():
 
     COLLECTED = collect_flags_by_keys(FLAGS)
 
-    contra, dup = check_consistency_of_collected(COLLECTED)
+    contra, dup = check_consistency_of_collected(COLLECTED, ConsistencyLevel.ALL)
     assert contra == ['-fomit-frame-pointer']   # TODO add support for -O1 vs -Os
     assert dup == ['-Werror', '-I/p/t/i', '--sysroot=...']
+
+    contra, dup = check_consistency_of_collected(COLLECTED, ConsistencyLevel.CONTRADICTING)
+    assert contra == ['-fomit-frame-pointer']
+    assert not dup
+
+    contra, dup = check_consistency_of_collected(COLLECTED, ConsistencyLevel.NONE)
+    assert not contra
+    assert not dup
 
 
 def test_check_flag_no_prefix():
