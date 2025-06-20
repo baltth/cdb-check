@@ -9,7 +9,7 @@ Usage: see `cdb_check.py -h` for details.
 from dataclasses import dataclass, field, fields, asdict
 from enum import Enum
 from pathlib import PurePath, Path
-from typing import List, Dict, Union, Tuple, Callable
+from typing import List, Dict, Set, Union, Tuple, Callable
 from shlex import split
 import argparse
 import copy
@@ -308,6 +308,18 @@ def collect_flags_by_keys(flags: List[str]) -> Dict[str, List[str]]:
     return res
 
 
+def missing_flag_text(flag: str) -> str:
+    return f'Missing flag \'{flag}\''
+
+
+def contradicting_flag_text(flag: str) -> str:
+    return f'Contradicting options of \'{flag}\''
+
+
+def duplicate_flag_text(flag: str) -> str:
+    return f'Duplicate(s) found of \'{flag}\''
+
+
 def get_duplicates(flags: List[str]) -> int:
     return len(flags) - len(set(flags))
 
@@ -346,9 +358,9 @@ def check_consistency(entry: CdbEntry, level: ConsistencyLevel) -> bool:
     flags_by_keys = collect_flags_by_keys(entry.orig_args)
     contra, dup = check_consistency_of_collected(flags_by_keys, level)
     for f in contra:
-        logging.getLogger().warning(f'{entry.file}: contradicting options of {f}')
+        logging.getLogger().warning(f'{entry.file}: {contradicting_flag_text(f)}')
     for f in dup:
-        logging.getLogger().warning(f'{entry.file}: duplicate(s) found of {f}')
+        logging.getLogger().warning(f'{entry.file}: {duplicate_flag_text(f)}')
     return not contra and not dup
 
 
@@ -381,25 +393,22 @@ def check_flag(flag: str, flag_set: List[str]) -> bool:
     return False
 
 
-def check_flags(entry: CdbEntry, flags: List[str]) -> bool:
+def check_flags(entry: CdbEntry, flags: List[str]) -> Set[str]:
     """
     Check if a set of compile flags is present (or not) in a CdbEntry,
     additionally log errors to stderr.
 
     Returns:
-        bool: True if all flags meet the expectations.
+        The set of flags not matching the expectations.
 
     TODO:
         - support MSVC arguments
     """
 
-    res = True
+    res: Set[str] = set()
     for f in flags:
         if not check_flag(f, entry.args):
-            logging.getLogger().warning(f'{entry.file}: missing flag \'{f}\'')
-            res = False
-    if res:
-        logging.getLogger().debug('All flags found')
+            res.add(f)
     return res
 
 
@@ -469,11 +478,12 @@ class Config:
     libraries: List[str] = field(default_factory=list)
     compile_units: List[str] = field(default_factory=list)
     flags: List[str] = field(default_factory=list)
-    verbose: bool = False
     flags_by_compiler: Dict[str, List[str]] = field(default_factory=dict)
     flags_by_library: Dict[str, List[str]] = field(default_factory=dict)
     flags_by_file: Dict[str, List[str]] = field(default_factory=dict)
     consistency: ConsistencyLevel = field(default=ConsistencyLevel.NONE)
+    verbose: bool = False
+    summary: bool = False
     extra: Dict[str, Union[bool, str, List[str]]] = field(default_factory=dict)
 
     @staticmethod
@@ -559,12 +569,12 @@ def get_flags_by_file(cfg: Config, file: str) -> List[str]:
     return select_preset(cfg.flags_by_file, lambda x: in_files(file, x))
 
 
-def check_entry(entry: CdbEntry, cfg: Config, dump: bool = False) -> bool:
+def check_entry(entry: CdbEntry, cfg: Config, dump: bool = False) -> Set[str]:
     """
     Perform flag check on a CdbEntry by flags fetched from the configuration.
 
     Returns:
-        bool: True if all flags are present in the compilation.
+        The set of flags not matching the expectations.
     """
 
     logger = logging.getLogger()
@@ -578,13 +588,55 @@ def check_entry(entry: CdbEntry, cfg: Config, dump: bool = False) -> bool:
 
     if dump:
         dump_entry(entry)
-        return True
+        return set()
 
     logger.debug(f'Expecting {" ".join(to_check) if to_check else "none"}')
 
     check_consistency(entry, cfg.consistency)
 
-    return check_flags(entry, to_check)
+    missing = check_flags(entry, to_check)
+
+    if cfg.verbose or not cfg.summary:
+        if not missing:
+            logger.debug('All expected flags OK')
+        else:
+            for f in missing:
+                logger.warning(f'{entry.file}: {missing_flag_text(f)}')
+
+    return missing
+
+
+CheckResult = Dict[str, Set[str]]
+
+
+def add_to_result(res: CheckResult, entry: CdbEntry, missing_flags: Set[str]):
+    """
+    Add the missing flag set of a CdbEntry to the aggregated result.
+    """
+    for f in missing_flags:
+        l = res.get(f, set())
+        l.add(entry.file)
+        res[f] = l
+
+
+def summary_report(result: CheckResult):
+
+    logger = logging.getLogger()
+
+    annotated = {missing_flag_text(k): v for k, v in result.items()}
+
+    def file_list(files: Set[str]) -> str:
+        assert files
+        INDENT = ' ' * 2
+        LIMIT = 5
+        files_as_string = '\n'.join([INDENT + f for f in list(files)[0:LIMIT]])
+        if len(files) > LIMIT:
+            files_as_string += f'\n{INDENT}... and {(len(files) - LIMIT)} more'
+        return files_as_string
+
+    for error, entries in annotated.items():
+        logger.warning(f'{error}: {len(entries)} issue(s) in')
+        logger.warning(file_list(entries))
 
 
 def check_cdb(cdb: List[CdbEntry],
@@ -619,19 +671,24 @@ def check_cdb(cdb: List[CdbEntry],
         cdb = [e for e in cdb if in_files(e, cfg.compile_units)]
 
     qualifier = ' matching' if filtered else ''
-    logger.info(f'Checking {len(cdb)}{qualifier} entries(s) ...')
+    logger.debug(f'Checking {len(cdb)}{qualifier} entries(s) ...')
 
     if not cdb:
         logger.warning('No compilation to check.')
         logger.warning('Please verify the effective configuration using the -v/--verbose argument.')
         return False
 
-    all_ok = True
-    for e in cdb:
-        if not check_entry(e, cfg, dump=dump):
-            all_ok = False
+    res: CheckResult = {}
 
-    return all_ok
+    for e in cdb:
+        missing = check_entry(e, cfg, dump=dump)
+        add_to_result(res, e, missing)
+
+    if cfg.summary:
+        logger.debug('Creating summary...')
+        summary_report(res)
+
+    return not res
 
 
 def process(cdb_file: str,
@@ -744,6 +801,7 @@ def arg_parser() -> argparse.ArgumentParser:
     out_opts = parser.add_argument_group('Output configuration')
 
     out_mx_opts = out_opts.add_mutually_exclusive_group()
+    out_mx_opts.add_argument('-s', '--summary', action='store_true', help='Summarize results')
     out_mx_opts.add_argument('-d', '--dump', action='store_true', help='Dump entries to check')
     out_opts.add_argument('-v', '--verbose', action='store_true', help='Verbose logging')
 
