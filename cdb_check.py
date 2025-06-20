@@ -724,20 +724,29 @@ def arg_parser() -> argparse.ArgumentParser:
     parser.description = "Tool to verify C/C++ build configuration. See README.md for details."
     parser.add_argument('input', help='Compile DB file (compile_commands.json)')
     parser.add_argument('-c', '--config', help='Config file')
+
     parser.add_argument('-f', '--flags', nargs='+', help='Flags to check, passed without \'-\' prefix')
-    parser.add_argument('-u', '--compile-units', nargs='+', help='Compile units to check, default: all')
-    parser.add_argument('-l',
-                        '--libraries',
-                        nargs='+',
-                        help='Logical \'libraries\' to check, default: all')
-    parser.add_argument('-b', '--base-dirs', nargs='+',
-                        help='Path prefixes to remove, either absolute or relative to $PWD')
     parser.add_argument('--consistency',
                         type=consistency_level,
                         default=ConsistencyLevel.CONTRADICTING,
                         help='Consistency check level [0-2, default: 1]')
-    parser.add_argument('-d', '--dump', action='store_true', help='Dump entries to check')
-    parser.add_argument('-v', '--verbose', action='store_true', help='Verbose logging')
+
+    in_opts = parser.add_argument_group('Input configuration')
+
+    in_opts.add_argument('-b', '--base-dirs', nargs='+',
+                         help='Path prefixes to remove, either absolute or relative to $PWD')
+    in_opts.add_argument('-u', '--compile-units', nargs='+', help='Compile units to check, default: all')
+    in_opts.add_argument('-l',
+                         '--libraries',
+                         nargs='+',
+                         help='Logical \'libraries\' to check, default: all')
+
+    out_opts = parser.add_argument_group('Output configuration')
+
+    out_mx_opts = out_opts.add_mutually_exclusive_group()
+    out_mx_opts.add_argument('-d', '--dump', action='store_true', help='Dump entries to check')
+    out_opts.add_argument('-v', '--verbose', action='store_true', help='Verbose logging')
+
     parser.epilog = """
 Notes about --libraries option:
 
