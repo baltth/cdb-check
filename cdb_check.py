@@ -7,6 +7,7 @@ Usage: see `cdb_check.py -h` for details.
 """
 
 from dataclasses import dataclass, field, fields, asdict
+from enum import Enum
 from pathlib import PurePath, Path
 from typing import List, Dict, Union, Tuple, Callable
 from shlex import split
@@ -153,6 +154,12 @@ FLAG_REGEX_PREFIX = '#'
 FLAG_BANNED_PREFIX = '!'
 
 
+class ConsistencyLevel(Enum):
+    NONE = 0
+    CONTRADICTING = 1
+    ALL = 2
+
+
 def dedup(l: List) -> List:
     return list(dict.fromkeys(l).keys())
 
@@ -160,17 +167,23 @@ def dedup(l: List) -> List:
 def to_entry(command: Dict[str, str]) -> CdbEntry:
     """
     Convert a dictionary loaded from a CDB to a CdbEntry.
-    Compiler, compile argument and object file properties are split from the 'command' field.
+    Compiler, compile argument and object file properties are split from
+    'command' or 'arguments' field.
     """
-    cmd = split(command['command'])
+    if 'command' in command.keys():
+        cmd = split(command['command'])
+    else:
+        assert 'arguments' in command.keys()
+        cmd = command['arguments']
+
     assert len(cmd) >= 2
 
     try:
         ix = cmd.index(OUT_FLAG)
         out_file = cmd[ix + 1]
     except Exception:
-        out_file = ''
         assert False
+
     args = cmd[1:]
     return CdbEntry(file=command['file'],
                     compiler=cmd[0],
@@ -312,12 +325,15 @@ def has_contradiction(flags: List[str]) -> bool:
     return not set(enablers).isdisjoint(set(disablers))
 
 
-def check_consistency_of_collected(flags_by_keys: Dict[str, List[str]]) -> Tuple[List[str], List[str]]:
+def check_consistency_of_collected(flags_by_keys: Dict[str, List[str]], level: ConsistencyLevel) -> Tuple[List[str], List[str]]:
+
+    if level == ConsistencyLevel.NONE:
+        return [], []
 
     contra: List[str] = []
     duplicates: List[str] = []
     for k, v in flags_by_keys.items():
-        dup = get_duplicates(v)
+        dup = get_duplicates(v) if level == ConsistencyLevel.ALL else 0
         if has_contradiction(v):
             contra.append(k)
         elif dup > 0:
@@ -325,10 +341,10 @@ def check_consistency_of_collected(flags_by_keys: Dict[str, List[str]]) -> Tuple
     return contra, duplicates
 
 
-def check_consistency(entry: CdbEntry) -> bool:
+def check_consistency(entry: CdbEntry, level: ConsistencyLevel) -> bool:
 
     flags_by_keys = collect_flags_by_keys(entry.orig_args)
-    contra, dup = check_consistency_of_collected(flags_by_keys)
+    contra, dup = check_consistency_of_collected(flags_by_keys, level)
     for f in contra:
         logging.getLogger().warning(f'{entry.file}: contradicting options of {f}')
     for f in dup:
@@ -425,8 +441,11 @@ def in_libraries(entry: Union[CdbEntry, str], libraries: Union[List[str], str]) 
     assert isinstance(libraries, list)
 
     def match(lib: str) -> bool:
-        l = lib.removeprefix('/').removesuffix('/')
-        return (f'/{l}/' in entry) or (f'CMakeFiles/{lib}.dir' in entry)
+        assert '**' not in lib
+        lib_pattern = path_wildcards_to_regex(lib.removeprefix('/').removesuffix('/'))
+        direct_pattern = f'/{lib_pattern}/'
+        cmake_pattern = f'/CMakeFiles/{lib_pattern}.dir/'
+        return re.search(cmake_pattern, entry) is not None or re.search(direct_pattern, entry) is not None
     return any(match(l) for l in libraries)
 
 
@@ -454,6 +473,7 @@ class Config:
     flags_by_compiler: Dict[str, List[str]] = field(default_factory=dict)
     flags_by_library: Dict[str, List[str]] = field(default_factory=dict)
     flags_by_file: Dict[str, List[str]] = field(default_factory=dict)
+    consistency: ConsistencyLevel = field(default=ConsistencyLevel.NONE)
     extra: Dict[str, Union[bool, str, List[str]]] = field(default_factory=dict)
 
     @staticmethod
@@ -562,7 +582,7 @@ def check_entry(entry: CdbEntry, cfg: Config, dump: bool = False) -> bool:
 
     logger.debug(f'Expecting {" ".join(to_check) if to_check else "none"}')
 
-    check_consistency(entry)
+    check_consistency(entry, cfg.consistency)
 
     return check_flags(entry, to_check)
 
@@ -693,6 +713,13 @@ def arg_parser() -> argparse.ArgumentParser:
     """
     Create CLI argument parser.
     """
+
+    def consistency_level(arg) -> ConsistencyLevel:
+        v = int(arg)
+        if v not in [m.value for m in ConsistencyLevel]:
+            raise argparse.ArgumentTypeError(f"Invalid health check level {v}")
+        return ConsistencyLevel(v)
+
     parser = argparse.ArgumentParser()
     parser.description = "Tool to verify C/C++ build configuration. See README.md for details."
     parser.add_argument('input', help='Compile DB file (compile_commands.json)')
@@ -705,6 +732,10 @@ def arg_parser() -> argparse.ArgumentParser:
                         help='Logical \'libraries\' to check, default: all')
     parser.add_argument('-b', '--base-dirs', nargs='+',
                         help='Path prefixes to remove, either absolute or relative to $PWD')
+    parser.add_argument('--consistency',
+                        type=consistency_level,
+                        default=ConsistencyLevel.CONTRADICTING,
+                        help='Consistency check level [0-2, default: 1]')
     parser.add_argument('-d', '--dump', action='store_true', help='Dump entries to check')
     parser.add_argument('-v', '--verbose', action='store_true', help='Verbose logging')
     parser.epilog = """
