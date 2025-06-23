@@ -353,15 +353,10 @@ def check_consistency_of_collected(flags_by_keys: Dict[str, List[str]], level: C
     return contra, duplicates
 
 
-def check_consistency(entry: CdbEntry, level: ConsistencyLevel) -> bool:
+def check_consistency(entry: CdbEntry, level: ConsistencyLevel) -> Tuple[List[str], List[str]]:
 
     flags_by_keys = collect_flags_by_keys(entry.orig_args)
-    contra, dup = check_consistency_of_collected(flags_by_keys, level)
-    for f in contra:
-        logging.getLogger().warning(f'{entry.file}: {contradicting_flag_text(f)}')
-    for f in dup:
-        logging.getLogger().warning(f'{entry.file}: {duplicate_flag_text(f)}')
-    return not contra and not dup
+    return check_consistency_of_collected(flags_by_keys, level)
 
 
 def check_flag(flag: str, flag_set: List[str]) -> bool:
@@ -393,7 +388,7 @@ def check_flag(flag: str, flag_set: List[str]) -> bool:
     return False
 
 
-def check_flags(entry: CdbEntry, flags: List[str]) -> Set[str]:
+def check_flags(entry: CdbEntry, flags: List[str]) -> List[str]:
     """
     Check if a set of compile flags is present (or not) in a CdbEntry,
     additionally log errors to stderr.
@@ -409,7 +404,7 @@ def check_flags(entry: CdbEntry, flags: List[str]) -> Set[str]:
     for f in flags:
         if not check_flag(f, entry.args):
             res.add(f)
-    return res
+    return list(res)
 
 
 def in_files(entry: Union[CdbEntry, str], cu_files: Union[List[str], str]) -> bool:
@@ -569,7 +564,32 @@ def get_flags_by_file(cfg: Config, file: str) -> List[str]:
     return select_preset(cfg.flags_by_file, lambda x: in_files(file, x))
 
 
-def check_entry(entry: CdbEntry, cfg: Config, dump: bool = False) -> Set[str]:
+@dataclass
+class ResultsByEntry:
+    missing: List[str] = field(default_factory=list)
+    contra: List[str] = field(default_factory=list)
+    duplicates: List[str] = field(default_factory=list)
+
+
+def has_to_report_entries(cfg: Config) -> bool:
+    return cfg.verbose or not cfg.summary
+
+
+def report_entry(file: str, res: ResultsByEntry):
+    logger = logging.getLogger()
+    for f in res.contra:
+        logger.warning(f'{file}: {contradicting_flag_text(f)}')
+    for f in res.duplicates:
+        logger.warning(f'{file}: {duplicate_flag_text(f)}')
+
+    if not res.missing:
+        logger.debug('All expected flags OK')
+    else:
+        for f in res.missing:
+            logger.warning(f'{file}: {missing_flag_text(f)}')
+
+
+def check_entry(entry: CdbEntry, cfg: Config, dump: bool = False) -> ResultsByEntry:
     """
     Perform flag check on a CdbEntry by flags fetched from the configuration.
 
@@ -588,42 +608,43 @@ def check_entry(entry: CdbEntry, cfg: Config, dump: bool = False) -> Set[str]:
 
     if dump:
         dump_entry(entry)
-        return set()
+        return ResultsByEntry()
 
     logger.debug(f'Expecting {" ".join(to_check) if to_check else "none"}')
 
-    check_consistency(entry, cfg.consistency)
+    res = ResultsByEntry()
+    res.contra, res.duplicates = check_consistency(entry, cfg.consistency)
+    res.missing = check_flags(entry, to_check)
 
-    missing = check_flags(entry, to_check)
+    if has_to_report_entries(cfg):
+        report_entry(entry.file, res)
 
-    if cfg.verbose or not cfg.summary:
-        if not missing:
-            logger.debug('All expected flags OK')
-        else:
-            for f in missing:
-                logger.warning(f'{entry.file}: {missing_flag_text(f)}')
-
-    return missing
+    return res
 
 
 CheckResult = Dict[str, Set[str]]
 
 
-def add_to_result(res: CheckResult, entry: CdbEntry, missing_flags: Set[str]):
+def add_to_result(res: CheckResult, entry: CdbEntry, by_entry: ResultsByEntry):
     """
     Add the missing flag set of a CdbEntry to the aggregated result.
     """
-    for f in missing_flags:
-        l = res.get(f, set())
+    def add_one(error: str):
+        l = res.get(error, set())
         l.add(entry.file)
-        res[f] = l
+        res[error] = l
+
+    for f in by_entry.missing:
+        add_one(missing_flag_text(f))
+    for f in by_entry.contra:
+        add_one(contradicting_flag_text(f))
+    for f in by_entry.duplicates:
+        add_one(duplicate_flag_text(f))
 
 
 def summary_report(result: CheckResult):
 
     logger = logging.getLogger()
-
-    annotated = {missing_flag_text(k): v for k, v in result.items()}
 
     def file_list(files: Set[str]) -> str:
         assert files
@@ -634,7 +655,7 @@ def summary_report(result: CheckResult):
             files_as_string += f'\n{INDENT}... and {(len(files) - LIMIT)} more'
         return files_as_string
 
-    for error, entries in annotated.items():
+    for error, entries in result.items():
         logger.warning(f'{error}: {len(entries)} issue(s) in')
         logger.warning(file_list(entries))
 
@@ -681,8 +702,8 @@ def check_cdb(cdb: List[CdbEntry],
     res: CheckResult = {}
 
     for e in cdb:
-        missing = check_entry(e, cfg, dump=dump)
-        add_to_result(res, e, missing)
+        res_by_entry = check_entry(e, cfg, dump=dump)
+        add_to_result(res, e, res_by_entry)
 
     if cfg.summary:
         logger.debug('Creating summary...')
