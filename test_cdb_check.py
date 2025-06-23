@@ -423,16 +423,16 @@ def test_check_flag_banned():
 
 def test_check_flags():
 
-    assert check_flags(TEST_ENTRY, [])
-    assert check_flags(TEST_ENTRY, ['A2'])
-    assert check_flags(TEST_ENTRY, ['A1', '-A2'])
+    assert check_flags(TEST_ENTRY, []) == []
+    assert check_flags(TEST_ENTRY, ['A2']) == []
+    assert check_flags(TEST_ENTRY, ['A1', '-A2']) == []
 
-    assert not check_flags(TEST_ENTRY, ['A1', 'A7'])
+    assert check_flags(TEST_ENTRY, ['A1', 'A7']) == ['A7']
 
-    assert check_flags(TEST_ENTRY, ['sysroot=/path/to/toolchain/include'])
-    assert check_flags(TEST_ENTRY, ['!#A[a-z]', '#A[0-9]'])
+    assert check_flags(TEST_ENTRY, ['sysroot=/path/to/toolchain/include']) == []
+    assert check_flags(TEST_ENTRY, ['!#A[a-z]', '#A[0-9]']) == []
 
-    assert check_flags(TEST_ENTRY, ['#^-A[\\d]$'])
+    assert check_flags(TEST_ENTRY, ['#^-A[\\d]$']) == []
 
 
 def test_in_files_lexical():
@@ -569,23 +569,23 @@ TEST_ENTRY_3 = CdbEntry(file='/path/to/src/file3.c',
 
 def test_check_entry():
 
-    assert check_entry(TEST_ENTRY_2, cfg=Config(flags=['A1']))
-    assert not check_entry(TEST_ENTRY_2, cfg=Config(flags=['A1', 'A3']))
+    assert check_entry(TEST_ENTRY_2, cfg=Config(flags=['A1'])) == ResultsByEntry()
+    assert check_entry(TEST_ENTRY_2, cfg=Config(flags=['A1', 'A3'])) == ResultsByEntry(missing=['A3'])
 
     assert check_entry(TEST_ENTRY_2, cfg=Config(
-        flags_by_compiler={'gcc': ['A1'], '*': ['fail']}))
-    assert not check_entry(TEST_ENTRY_2, cfg=Config(
-        flags_by_compiler={'g++': ['A1'], '*': ['fail']}))
+        flags_by_compiler={'gcc': ['A1'], '*': ['fail']})) == ResultsByEntry()
+    assert check_entry(TEST_ENTRY_2, cfg=Config(
+        flags_by_compiler={'g++': ['A1'], '*': ['fail']})) == ResultsByEntry(missing=['fail'])
 
     assert check_entry(TEST_ENTRY_2, cfg=Config(
-        flags_by_library={'lib': ['A2'], '*': ['fail']}))
-    assert not check_entry(TEST_ENTRY_3, cfg=Config(
-        flags_by_library={'lib2': ['A2'], '*': ['fail']}))
+        flags_by_library={'lib': ['A2'], '*': ['fail']})) == ResultsByEntry()
+    assert check_entry(TEST_ENTRY_3, cfg=Config(
+        flags_by_library={'lib2': ['A2'], '*': ['fail']})) == ResultsByEntry(missing=['A2'])
 
     assert check_entry(TEST_ENTRY_2, cfg=Config(
-        flags_by_file={'**/file*.c': ['A2'], '*': ['fail']}))
-    assert not check_entry(TEST_ENTRY_2, cfg=Config(
-        flags_by_file={'**/file*.c': ['A5'], '*': ['fail']}))
+        flags_by_file={'**/file*.c': ['A2'], '*': ['fail']})) == ResultsByEntry()
+    assert check_entry(TEST_ENTRY_2, cfg=Config(
+        flags_by_file={'**/file*.c': ['A5'], '*': ['fail']})) == ResultsByEntry(missing=['A5'])
 
 
 TEST_CDB = [TEST_ENTRY, TEST_ENTRY_2, TEST_ENTRY_3]
