@@ -22,10 +22,10 @@ A short example showing missing flags and inconsistency in compile options:
 $ ./cdb_check.py -c project_cfg.json build/compile_commands.json
 
 Checking 14 entries(s) ...
-[...]/src/file4.c: missing flag 'pedantic'
-[...]/src/file5.cpp: duplicate(s) found of --sysroot=...
-[...]/src/file5.cpp: contradicting options of -fomit-frame-pointer
-[...]/src/file5.cpp: missing flag 'std=c++14'
+[...]/src/file4.c: Missing flag 'pedantic'
+[...]/src/file5.cpp: Duplicate(s) found of --sysroot=...
+[...]/src/file5.cpp: Contradicting options of -fomit-frame-pointer
+[...]/src/file5.cpp: Missing flag 'std=c++14'
 ```
 
 ## Installation, dependencies
@@ -115,7 +115,7 @@ Some _common use cases_ for the tool:
   $ ./cdb_check.py test_data/cdb.json -f pedantic
 
   Checking 4 entries(s) ...
-  /path/to/project/prj/src/file4.c: missing flag 'pedantic'
+  /path/to/project/prj/src/file4.c: Missing flag 'pedantic'
   ```
   Oops... it failed, but this is the goal of the tool.
   Let's take a closer look of this compilation!
@@ -339,14 +339,18 @@ The tool automatically detects and reports _duplicate_ and _contradicting_
 compiler options for several cases. For example
 - passing `--sysroot=` multiple times is reported as
   ```
-  [...]/src/test_c.c: duplicate(s) found of --sysroot=...
+  [...]/src/test_c.c: Duplicate(s) found of --sysroot=...
   ```
 - using `-fomit-frame-pointer` and `-fno-omit-frame-pointer` at the same time
   is reported as
   ```
-  [...]/src/test_c.c: contradicting options of -fomit-frame-pointer
+  [...]/src/test_c.c: Contradicting options of -fomit-frame-pointer
   ```
 
+Health check can be configured with the `--consistency N` option, where
+- `N == 0` disables the feature
+- `N == 1` enables the check of contradicting options (default)
+- `N == 2` also enables the duplicate checks
 
 ### Configuration
 
