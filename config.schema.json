@@ -1,0 +1,82 @@
+{
+  "type": "object",
+  "properties": {
+    "base_dirs": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": []
+    },
+    "libraries": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": []
+    },
+    "compile_units": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": []
+    },
+    "flags": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": []
+    },
+    "flags_by_compiler": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "default": {}
+    },
+    "flags_by_library": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "default": {}
+    },
+    "flags_by_file": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "default": {}
+    },
+    "consistency": {
+      "type": "integer",
+      "enum": [
+        0,
+        1,
+        2
+      ],
+      "default": 0
+    },
+    "verbose": {
+      "type": "boolean",
+      "default": false
+    },
+    "summary": {
+      "type": "boolean",
+      "default": false
+    }
+  },
+  "description": "JSON schema for cdb-check configuration",
+  "$schema": "http://json-schema.org/draft-06/schema#"
+}
