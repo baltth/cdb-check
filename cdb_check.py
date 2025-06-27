@@ -153,6 +153,8 @@ WILDCARD = '*'
 FLAG_REGEX_PREFIX = '#'
 FLAG_BANNED_PREFIX = '!'
 
+PRESET_REF_PREFIX = '$'
+
 
 class ConsistencyLevel(Enum):
     NONE = 0
@@ -628,6 +630,19 @@ def get_flags_by_layers(cfg: Config, entry: CdbEntry) -> List[str]:
     return flags
 
 
+def resolve_preset_refs(presets: Dict[str, List[str]], flags: List[str]) -> List[str]:
+    if not flags:
+        return []
+
+    if flags[0].startswith(PRESET_REF_PREFIX):
+        preset_name = flags[0].removeprefix(PRESET_REF_PREFIX)
+        front = resolve_preset_refs(presets, presets[preset_name])
+    else:
+        front = [flags[0]]
+
+    return front + resolve_preset_refs(presets, flags[1:])
+
+
 def get_relevant_flags(cfg: Config, entry: CdbEntry) -> List[str]:
     """
     Fetch all relevant flags by the configuration.
@@ -644,7 +659,7 @@ def get_relevant_flags(cfg: Config, entry: CdbEntry) -> List[str]:
         + get_flags_by_library(cfg, entry.out_file) \
         + get_flags_by_file(cfg, entry.file) \
         + get_flags_by_layers(cfg, entry)
-    return dedup(to_check)
+    return dedup(resolve_preset_refs(cfg.presets, to_check))
 
 
 @dataclass

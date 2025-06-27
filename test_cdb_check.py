@@ -615,6 +615,22 @@ def test_get_flags_by_layers():
     assert get_flags_by_layers(CFG, TEST_ENTRY_2) == LIBRARY_LAYER.flags + FILE_LAYER.flags
 
 
+def test_resolve_preset_refs():
+
+    PRESETS = {
+        'p1': ['A1', 'A0'],
+        'p2': ['A2'],
+        'p_ref': ['A1', '$p2', 'A3']
+    }
+
+    assert resolve_preset_refs({}, []) == []
+    assert resolve_preset_refs(PRESETS, []) == []
+
+    assert resolve_preset_refs(PRESETS, ['A1', 'A2']) == ['A1', 'A2']
+    assert resolve_preset_refs(PRESETS, ['A1', '$p1']) == ['A1', 'A1', 'A0']
+    assert resolve_preset_refs(PRESETS, ['$p_ref', 'A4']) == ['A1', 'A2', 'A3', 'A4']
+
+
 def test_get_relevant_flags():
 
     assert get_relevant_flags(Config(flags=['A1']), TEST_ENTRY_2) == ['A1']
@@ -629,8 +645,12 @@ def test_get_relevant_flags():
     assert get_relevant_flags(Config(flags_by_file={'**/*.cpp': ['A1']}), TEST_ENTRY_2) == []
 
     LAYERS = [LIBRARY_LAYER, QCC_COMPILER_LAYER, FILE_LAYER]
-    CFG = Config(flags=['A0'], flags_by_library={'lib': ['A1']}, layers=LAYERS)
-    assert get_relevant_flags(CFG, TEST_ENTRY_2) == ['A0', 'A1', 'A2', 'A3']
+    CFG = Config(flags=['A0'],
+                 flags_by_library={'lib': ['A1', '$p1']},
+                 layers=LAYERS,
+                 presets={'p1': ['P1']})
+    flags = get_relevant_flags(CFG, TEST_ENTRY_2)
+    assert set(flags) == {'A0', 'A1', 'A2', 'A3', 'P1'}
 
 
 def test_check_entry():
