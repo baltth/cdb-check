@@ -2,62 +2,35 @@
   "type": "object",
   "properties": {
     "base_dirs": {
-      "type": "array",
-      "items": {
-        "type": "string"
-      },
-      "default": []
+      "$ref": "#/definitions/Strings"
     },
     "libraries": {
-      "type": "array",
-      "items": {
-        "type": "string"
-      },
-      "default": []
+      "$ref": "#/definitions/Strings"
     },
     "compile_units": {
-      "type": "array",
-      "items": {
-        "type": "string"
-      },
-      "default": []
+      "$ref": "#/definitions/Strings"
     },
     "flags": {
-      "type": "array",
-      "items": {
-        "type": "string"
-      },
-      "default": []
+      "$ref": "#/definitions/Strings"
     },
     "flags_by_compiler": {
-      "type": "object",
-      "additionalProperties": {
-        "type": "array",
-        "items": {
-          "type": "string"
-        }
-      },
-      "default": {}
+      "$ref": "#/definitions/StringsMap"
     },
     "flags_by_library": {
-      "type": "object",
-      "additionalProperties": {
-        "type": "array",
-        "items": {
-          "type": "string"
-        }
-      },
-      "default": {}
+      "$ref": "#/definitions/StringsMap"
     },
     "flags_by_file": {
-      "type": "object",
-      "additionalProperties": {
-        "type": "array",
-        "items": {
-          "type": "string"
-        }
+      "$ref": "#/definitions/StringsMap"
+    },
+    "presets": {
+      "$ref": "#/definitions/StringsMap"
+    },
+    "layers": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/Layer"
       },
-      "default": {}
+      "default": []
     },
     "consistency": {
       "type": "integer",
@@ -78,5 +51,42 @@
     }
   },
   "description": "JSON schema for cdb-check configuration",
-  "$schema": "http://json-schema.org/draft-06/schema#"
+  "$schema": "http://json-schema.org/draft-06/schema#",
+  "definitions": {
+    "Layer": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "default": ""
+        },
+        "compilers": {
+          "$ref": "#/definitions/Strings"
+        },
+        "libraries": {
+          "$ref": "#/definitions/Strings"
+        },
+        "files": {
+          "$ref": "#/definitions/Strings"
+        },
+        "flags": {
+          "$ref": "#/definitions/Strings"
+        }
+      }
+    },
+    "Strings": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": []
+    },
+    "StringsMap": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/definitions/Strings"
+      },
+      "default": {}
+    }
+  }
 }
