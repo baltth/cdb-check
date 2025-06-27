@@ -566,26 +566,77 @@ TEST_ENTRY_3 = CdbEntry(file='/path/to/src/file3.c',
                         args=['-A1', '-A3', '-A4', '-I/path/to/src/include'],
                         out_file='/path/to/build/CMakeFiles/lib2.dir/src/file3.c.o')
 
+FILE_LAYER = Layer(name='',
+                   files=['**/*2.c', '**/*2.cpp'],
+                   flags=['A2'])
+
+LIBRARY_LAYER = Layer(name='',
+                      libraries=['lib', 'another_lib'],
+                      flags=['A2', 'A3'])
+
+QCC_COMPILER_LAYER = Layer(name='',
+                           compilers=['**/*qcc'],
+                           flags=['A3', 'A4'])
+
+
+def test_is_matching_layer():
+
+    assert is_matching_layer(Layer(), TEST_ENTRY_2)
+
+    assert is_matching_layer(FILE_LAYER, TEST_ENTRY_2)
+    assert not is_matching_layer(FILE_LAYER, TEST_ENTRY_3)
+
+    assert is_matching_layer(LIBRARY_LAYER, TEST_ENTRY_2)
+    assert not is_matching_layer(LIBRARY_LAYER, TEST_ENTRY_3)
+
+    COMPILER_LAYER = Layer(name='',
+                           compilers=['**/*gcc'])
+
+    assert is_matching_layer(COMPILER_LAYER, TEST_ENTRY_2)
+
+    COMPLEX_LAYER = Layer(name='',
+                          compilers=['**/*gcc'],
+                          libraries=['lib2']
+                          )
+
+    assert not is_matching_layer(COMPLEX_LAYER, TEST_ENTRY_2)
+    assert is_matching_layer(COMPLEX_LAYER, TEST_ENTRY_3)
+
+
+def test_get_matching_layers():
+
+    ALL_LAYERS = [LIBRARY_LAYER, QCC_COMPILER_LAYER, FILE_LAYER]
+    assert get_matching_layers(ALL_LAYERS, TEST_ENTRY_2) == [LIBRARY_LAYER, FILE_LAYER]
+
+
+def test_get_flags_by_layers():
+
+    CFG = Config(layers=[LIBRARY_LAYER, QCC_COMPILER_LAYER, FILE_LAYER])
+    assert get_flags_by_layers(CFG, TEST_ENTRY_2) == LIBRARY_LAYER.flags + FILE_LAYER.flags
+
+
+def test_get_relevant_flags():
+
+    assert get_relevant_flags(Config(flags=['A1']), TEST_ENTRY_2) == ['A1']
+
+    assert get_relevant_flags(Config(flags_by_compiler={'gcc': ['A1']}), TEST_ENTRY_2) == ['A1']
+    assert get_relevant_flags(Config(flags_by_compiler={'g++': ['A1']}), TEST_ENTRY_2) == []
+
+    assert get_relevant_flags(Config(flags_by_library={'lib': ['A1']}), TEST_ENTRY_2) == ['A1']
+    assert get_relevant_flags(Config(flags_by_library={'lib7': ['A1']}), TEST_ENTRY_2) == []
+
+    assert get_relevant_flags(Config(flags_by_file={'**/*.c': ['A1']}), TEST_ENTRY_2) == ['A1']
+    assert get_relevant_flags(Config(flags_by_file={'**/*.cpp': ['A1']}), TEST_ENTRY_2) == []
+
+    LAYERS = [LIBRARY_LAYER, QCC_COMPILER_LAYER, FILE_LAYER]
+    CFG = Config(flags=['A0'], flags_by_library={'lib': ['A1']}, layers=LAYERS)
+    assert get_relevant_flags(CFG, TEST_ENTRY_2) == ['A0', 'A1', 'A2', 'A3']
+
 
 def test_check_entry():
 
     assert check_entry(TEST_ENTRY_2, cfg=Config(flags=['A1'])) == ResultsByEntry()
     assert check_entry(TEST_ENTRY_2, cfg=Config(flags=['A1', 'A3'])) == ResultsByEntry(missing=['A3'])
-
-    assert check_entry(TEST_ENTRY_2, cfg=Config(
-        flags_by_compiler={'gcc': ['A1'], '*': ['fail']})) == ResultsByEntry()
-    assert check_entry(TEST_ENTRY_2, cfg=Config(
-        flags_by_compiler={'g++': ['A1'], '*': ['fail']})) == ResultsByEntry(missing=['fail'])
-
-    assert check_entry(TEST_ENTRY_2, cfg=Config(
-        flags_by_library={'lib': ['A2'], '*': ['fail']})) == ResultsByEntry()
-    assert check_entry(TEST_ENTRY_3, cfg=Config(
-        flags_by_library={'lib2': ['A2'], '*': ['fail']})) == ResultsByEntry(missing=['A2'])
-
-    assert check_entry(TEST_ENTRY_2, cfg=Config(
-        flags_by_file={'**/file*.c': ['A2'], '*': ['fail']})) == ResultsByEntry()
-    assert check_entry(TEST_ENTRY_2, cfg=Config(
-        flags_by_file={'**/file*.c': ['A5'], '*': ['fail']})) == ResultsByEntry(missing=['A5'])
 
 
 TEST_CDB = [TEST_ENTRY, TEST_ENTRY_2, TEST_ENTRY_3]

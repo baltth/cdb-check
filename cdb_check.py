@@ -480,6 +480,7 @@ class Layer:
     files: List[str] = field(default_factory=list)
     flags: List[str] = field(default_factory=list)
 
+
 @dataclass
 class Config:
     base_dirs: List[str] = field(default_factory=list)
@@ -505,9 +506,9 @@ class Config:
         return [f.name for f in fields(Config) if f.name != 'extra']
 
 
-def select_preset(presets: Dict[str, List[str]], predicate: Callable[[str], bool]) -> List[str]:
+def select_from_lists(presets: Dict[str, List[str]], predicate: Callable[[str], bool]) -> List[str]:
     """
-    Select from preset list by predicate.
+    Select from preset lists by predicate.
 
     Returns:
         List[str]: - Matching preset value, or
@@ -539,8 +540,10 @@ def get_flags_by_compiler(cfg: Config, comp: str) -> List[str]:
                    - cfg.flags_by_compiler[WILDCARD] if present, or
                    - empty
     """
+    if not cfg.flags_by_compiler:
+        return []
     logging.getLogger().debug('Checking for flag preset by compiler ...')
-    return select_preset(cfg.flags_by_compiler, lambda x: match_path(ref=x, path=comp))
+    return select_from_lists(cfg.flags_by_compiler, lambda x: match_path(ref=x, path=comp))
 
 
 def get_flags_by_library(cfg: Config, out_file: str) -> List[str]:
@@ -557,8 +560,10 @@ def get_flags_by_library(cfg: Config, out_file: str) -> List[str]:
                    - cfg.flags_by_library[WILDCARD] if present, or
                    - empty
     """
+    if not cfg.flags_by_library:
+        return []
     logging.getLogger().debug('Checking for flag preset by library ...')
-    return select_preset(cfg.flags_by_library, lambda x: in_libraries(out_file, x))
+    return select_from_lists(cfg.flags_by_library, lambda x: in_libraries(out_file, x))
 
 
 def get_flags_by_file(cfg: Config, file: str) -> List[str]:
@@ -575,8 +580,71 @@ def get_flags_by_file(cfg: Config, file: str) -> List[str]:
                    - cfg.flags_by_file[WILDCARD] if present, or
                    - empty
     """
+    if not cfg.flags_by_file:
+        return []
     logging.getLogger().debug('Checking for flag preset by file name ...')
-    return select_preset(cfg.flags_by_file, lambda x: in_files(file, x))
+    return select_from_lists(cfg.flags_by_file, lambda x: in_files(file, x))
+
+
+def is_matching_layer(layer: Layer, entry: CdbEntry) -> bool:
+    """
+    Check layer match.
+    A layer is considered matching if _all_ filter lists contain at least one match or empty.
+    """
+    compiler_match = any(match_path(ref=c, path=entry.compiler) for c in layer.compilers) if layer.compilers else True
+    lib_match = any(in_libraries(entry, l) for l in layer.libraries) if layer.libraries else True
+    file_match = any(in_files(entry, f) for f in layer.files) if layer.files else True
+    return compiler_match and lib_match and file_match
+
+
+def get_matching_layers(layers: List[Layer], entry: CdbEntry) -> List[Layer]:
+    """
+    Fetch matching layers from configuration.
+    """
+    return [l for l in layers if is_matching_layer(l, entry)]
+
+
+def get_flags_by_layers(cfg: Config, entry: CdbEntry) -> List[str]:
+    """
+    Fetch flags for the matching layers predefined in the configuration.
+
+    Args:
+        cfg: Config
+        entry: CdbEntry
+
+    Returns:
+        List[str]: Flags aggregated from all matching layers
+    """
+    if not cfg.layers:
+        return []
+    logger = logging.getLogger()
+    logger.debug('Checking for matching layers ...')
+    matching = get_matching_layers(cfg.layers, entry)
+    flags = []
+    for i, m in enumerate(matching):
+        name = m.name if m.name else f'#{i}'
+        logging.getLogger().debug(f'  ... matching: {name}')
+        flags.extend(m.flags)
+    return flags
+
+
+def get_relevant_flags(cfg: Config, entry: CdbEntry) -> List[str]:
+    """
+    Fetch all relevant flags by the configuration.
+
+    Args:
+        cfg: Config
+        entry: CdbEntry
+
+    Returns:
+        List[str]: Deduplicated list of relevant flags
+    """
+    to_check = cfg.flags \
+        + get_flags_by_compiler(cfg, entry.compiler) \
+        + get_flags_by_library(cfg, entry.out_file) \
+        + get_flags_by_file(cfg, entry.file) \
+        + get_flags_by_layers(cfg, entry)
+    return dedup(to_check)
 
 
 @dataclass
@@ -615,11 +683,7 @@ def check_entry(entry: CdbEntry, cfg: Config, dump: bool = False) -> ResultsByEn
     logger = logging.getLogger()
     logger.debug(f'Entry {entry.file} ...')
 
-    to_check = cfg.flags \
-        + get_flags_by_compiler(cfg, entry.compiler) \
-        + get_flags_by_library(cfg, entry.out_file) \
-        + get_flags_by_file(cfg, entry.file)
-    to_check = dedup(to_check)
+    to_check = get_relevant_flags(cfg, entry)
 
     if dump:
         dump_entry(entry)
