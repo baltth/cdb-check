@@ -161,7 +161,12 @@ class ConsistencyLevel(Enum):
 
 
 def dedup(l: List) -> List:
-    return list(dict.fromkeys(l).keys())
+    # The single line method with dict.fromkeys(l) does not work with List[Dict]...
+    res = []
+    for item in l:
+        if item not in res:
+            res.append(item)
+    return res
 
 
 def to_entry(command: Dict[str, str]) -> CdbEntry:
@@ -468,6 +473,14 @@ def dump_entry(e: CdbEntry):
 
 
 @dataclass
+class Layer:
+    name: str = ''
+    compilers: List[str] = field(default_factory=list)
+    libraries: List[str] = field(default_factory=list)
+    files: List[str] = field(default_factory=list)
+    flags: List[str] = field(default_factory=list)
+
+@dataclass
 class Config:
     base_dirs: List[str] = field(default_factory=list)
     libraries: List[str] = field(default_factory=list)
@@ -476,6 +489,8 @@ class Config:
     flags_by_compiler: Dict[str, List[str]] = field(default_factory=dict)
     flags_by_library: Dict[str, List[str]] = field(default_factory=dict)
     flags_by_file: Dict[str, List[str]] = field(default_factory=dict)
+    presets: Dict[str, List[str]] = field(default_factory=dict)
+    layers: List[Layer] = field(default_factory=list)
     consistency: ConsistencyLevel = field(default=ConsistencyLevel.NONE)
     verbose: bool = False
     summary: bool = False
@@ -745,6 +760,7 @@ def update_config(cfg: Config,
                   report_foreign_keys: bool = False) -> Config:
     known_keys = [k for k in data_to_add.keys() if k in Config.keys()]
     foreign_keys = [k for k in data_to_add.keys() if k not in known_keys]
+    foreign_keys = [k for k in foreign_keys if k != '$schema']
 
     def add(existing, val):
         if isinstance(existing, list):
@@ -763,7 +779,11 @@ def update_config(cfg: Config,
 
     updated = copy.copy(cfg)
     for k in known_keys:
-        setattr(updated, k, add(getattr(updated, k), data_to_add[k]))
+        if k == 'layers':
+            to_add = [Layer(**d) for d in data_to_add[k]]
+        else:
+            to_add = data_to_add[k]
+        setattr(updated, k, add(getattr(updated, k), to_add))
 
     for k in foreign_keys:
         updated.extra[k] = data_to_add[k]
