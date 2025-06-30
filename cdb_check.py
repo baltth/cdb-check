@@ -481,6 +481,7 @@ class Layer:
     libraries: List[str] = field(default_factory=list)
     files: List[str] = field(default_factory=list)
     flags: List[str] = field(default_factory=list)
+    drop_flags: List[str] = field(default_factory=list)
 
 
 @dataclass

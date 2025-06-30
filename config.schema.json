@@ -71,6 +71,9 @@
         },
         "flags": {
           "$ref": "#/definitions/Strings"
+        },
+        "drop_flags": {
+          "$ref": "#/definitions/Strings"
         }
       }
     },
