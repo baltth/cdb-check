@@ -153,6 +153,8 @@ WILDCARD = '*'
 FLAG_REGEX_PREFIX = '#'
 FLAG_BANNED_PREFIX = '!'
 
+PRESET_REF_PREFIX = '$'
+
 
 class ConsistencyLevel(Enum):
     NONE = 0
@@ -161,19 +163,30 @@ class ConsistencyLevel(Enum):
 
 
 def dedup(l: List) -> List:
-    return list(dict.fromkeys(l).keys())
+    # The single line method with dict.fromkeys(l) does not work with List[Dict]...
+    res = []
+    for item in l:
+        if item not in res:
+            res.append(item)
+    return res
 
 
-def to_entry(command: Dict[str, str]) -> CdbEntry:
+def to_entry(command: Dict[str, Union[str, List[str]]]) -> CdbEntry:
     """
     Convert a dictionary loaded from a CDB to a CdbEntry.
     Compiler, compile argument and object file properties are split from
     'command' or 'arguments' field.
     """
+
+    assert isinstance(command['file'], str)
+    assert isinstance(command['directory'], str)
+
     if 'command' in command.keys():
+        assert isinstance(command['command'], str)
         cmd = split(command['command'])
     else:
         assert 'arguments' in command.keys()
+        assert isinstance(command['arguments'], list)
         cmd = command['arguments']
 
     assert len(cmd) >= 2
@@ -468,6 +481,16 @@ def dump_entry(e: CdbEntry):
 
 
 @dataclass
+class Layer:
+    name: str = ''
+    compilers: List[str] = field(default_factory=list)
+    libraries: List[str] = field(default_factory=list)
+    files: List[str] = field(default_factory=list)
+    flags: List[str] = field(default_factory=list)
+    drop_flags: List[str] = field(default_factory=list)
+
+
+@dataclass
 class Config:
     base_dirs: List[str] = field(default_factory=list)
     libraries: List[str] = field(default_factory=list)
@@ -476,6 +499,8 @@ class Config:
     flags_by_compiler: Dict[str, List[str]] = field(default_factory=dict)
     flags_by_library: Dict[str, List[str]] = field(default_factory=dict)
     flags_by_file: Dict[str, List[str]] = field(default_factory=dict)
+    presets: Dict[str, List[str]] = field(default_factory=dict)
+    layers: List[Layer] = field(default_factory=list)
     consistency: ConsistencyLevel = field(default=ConsistencyLevel.NONE)
     verbose: bool = False
     summary: bool = False
@@ -490,9 +515,9 @@ class Config:
         return [f.name for f in fields(Config) if f.name != 'extra']
 
 
-def select_preset(presets: Dict[str, List[str]], predicate: Callable[[str], bool]) -> List[str]:
+def select_from_lists(presets: Dict[str, List[str]], predicate: Callable[[str], bool]) -> List[str]:
     """
-    Select from preset list by predicate.
+    Select from preset lists by predicate.
 
     Returns:
         List[str]: - Matching preset value, or
@@ -524,8 +549,10 @@ def get_flags_by_compiler(cfg: Config, comp: str) -> List[str]:
                    - cfg.flags_by_compiler[WILDCARD] if present, or
                    - empty
     """
+    if not cfg.flags_by_compiler:
+        return []
     logging.getLogger().debug('Checking for flag preset by compiler ...')
-    return select_preset(cfg.flags_by_compiler, lambda x: match_path(ref=x, path=comp))
+    return select_from_lists(cfg.flags_by_compiler, lambda x: match_path(ref=x, path=comp))
 
 
 def get_flags_by_library(cfg: Config, out_file: str) -> List[str]:
@@ -542,8 +569,10 @@ def get_flags_by_library(cfg: Config, out_file: str) -> List[str]:
                    - cfg.flags_by_library[WILDCARD] if present, or
                    - empty
     """
+    if not cfg.flags_by_library:
+        return []
     logging.getLogger().debug('Checking for flag preset by library ...')
-    return select_preset(cfg.flags_by_library, lambda x: in_libraries(out_file, x))
+    return select_from_lists(cfg.flags_by_library, lambda x: in_libraries(out_file, x))
 
 
 def get_flags_by_file(cfg: Config, file: str) -> List[str]:
@@ -560,8 +589,92 @@ def get_flags_by_file(cfg: Config, file: str) -> List[str]:
                    - cfg.flags_by_file[WILDCARD] if present, or
                    - empty
     """
+    if not cfg.flags_by_file:
+        return []
     logging.getLogger().debug('Checking for flag preset by file name ...')
-    return select_preset(cfg.flags_by_file, lambda x: in_files(file, x))
+    return select_from_lists(cfg.flags_by_file, lambda x: in_files(file, x))
+
+
+def is_matching_layer(layer: Layer, entry: CdbEntry) -> bool:
+    """
+    Check layer match.
+    A layer is considered matching if _all_ filter lists contain at least one match or empty.
+    """
+    compiler_match = any(match_path(ref=c, path=entry.compiler) for c in layer.compilers) if layer.compilers else True
+    lib_match = any(in_libraries(entry, l) for l in layer.libraries) if layer.libraries else True
+    file_match = any(in_files(entry, f) for f in layer.files) if layer.files else True
+    return compiler_match and lib_match and file_match
+
+
+def get_matching_layers(layers: List[Layer], entry: CdbEntry) -> List[Layer]:
+    """
+    Fetch matching layers from configuration.
+    """
+    return [l for l in layers if is_matching_layer(l, entry)]
+
+
+def resolve_preset_refs(presets: Dict[str, List[str]], flags: List[str]) -> List[str]:
+    if not flags:
+        return []
+
+    if flags[0].startswith(PRESET_REF_PREFIX):
+        preset_name = flags[0].removeprefix(PRESET_REF_PREFIX)
+        front = resolve_preset_refs(presets, presets[preset_name])
+    else:
+        front = [flags[0]]
+
+    return front + resolve_preset_refs(presets, flags[1:])
+
+
+def apply_flags_by_layers(cfg: Config, entry: CdbEntry, flags: List[str]) -> List[str]:
+    """
+    Fetch flags for the matching layers predefined in the configuration.
+
+    Args:
+        cfg: Config
+        entry: CdbEntry
+        flags: Collected flag set before applying layers
+
+    Returns:
+        List[str]: Flags aggregated from all matching layers
+    """
+
+    def resolve_refs(f: List[str]) -> List[str]:
+        return resolve_preset_refs(cfg.presets, f)
+
+    flags = resolve_refs(flags)
+    if not cfg.layers:
+        return flags
+
+    logger = logging.getLogger()
+    logger.debug('Checking for matching layers ...')
+    matching = get_matching_layers(cfg.layers, entry)
+    for i, m in enumerate(matching):
+        name = m.name if m.name else f'#{i}'
+        logging.getLogger().debug(f'  ... matching: {name}')
+
+        flags = [f for f in flags if f not in resolve_refs(m.drop_flags)]
+        flags.extend(resolve_refs(m.flags))
+    return flags
+
+
+def get_relevant_flags(cfg: Config, entry: CdbEntry) -> List[str]:
+    """
+    Fetch all relevant flags by the configuration.
+
+    Args:
+        cfg: Config
+        entry: CdbEntry
+
+    Returns:
+        List[str]: Deduplicated list of relevant flags
+    """
+    to_check = cfg.flags \
+        + get_flags_by_compiler(cfg, entry.compiler) \
+        + get_flags_by_library(cfg, entry.out_file) \
+        + get_flags_by_file(cfg, entry.file)
+    to_check = apply_flags_by_layers(cfg, entry, to_check)
+    return dedup(to_check)
 
 
 @dataclass
@@ -600,11 +713,7 @@ def check_entry(entry: CdbEntry, cfg: Config, dump: bool = False) -> ResultsByEn
     logger = logging.getLogger()
     logger.debug(f'Entry {entry.file} ...')
 
-    to_check = cfg.flags \
-        + get_flags_by_compiler(cfg, entry.compiler) \
-        + get_flags_by_library(cfg, entry.out_file) \
-        + get_flags_by_file(cfg, entry.file)
-    to_check = dedup(to_check)
+    to_check = get_relevant_flags(cfg, entry)
 
     if dump:
         dump_entry(entry)
@@ -745,6 +854,7 @@ def update_config(cfg: Config,
                   report_foreign_keys: bool = False) -> Config:
     known_keys = [k for k in data_to_add.keys() if k in Config.keys()]
     foreign_keys = [k for k in data_to_add.keys() if k not in known_keys]
+    foreign_keys = [k for k in foreign_keys if k != '$schema']
 
     def add(existing, val):
         if isinstance(existing, list):
@@ -763,7 +873,11 @@ def update_config(cfg: Config,
 
     updated = copy.copy(cfg)
     for k in known_keys:
-        setattr(updated, k, add(getattr(updated, k), data_to_add[k]))
+        if k == 'layers':
+            to_add = [Layer(**d) for d in data_to_add[k]]
+        else:
+            to_add = data_to_add[k]
+        setattr(updated, k, add(getattr(updated, k), to_add))
 
     for k in foreign_keys:
         updated.extra[k] = data_to_add[k]

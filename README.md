@@ -56,7 +56,7 @@ See `./cdb-check-py -h`
   and contradicting flags
 - dump the loaded and filtered CDB for debugging
 
-### How to use?
+### Step by step
 
 Consider a project built with CMake like
 ```
@@ -175,7 +175,7 @@ Some _common use cases_ for the tool:
   OK
   ```
 
-#### Using a config file
+### Using a config file
 
 - _Create a configuration_ to get rid of CLI options:
   create a file `cfg.json` with contents
@@ -205,12 +205,12 @@ Some _common use cases_ for the tool:
   ./cdb_check.py -c test_data/cfg.json test_data/cdb.json -l lib -f DLIB_DEFINE=1
   ```
 
-#### Presets in configuration
+### Selective configuration with 'choose one' lists
 
 Consider a multi platform project, e.g. compiled to x86 and _aarch64._
 The latter will produce a different `compile_commands.json`,
 e.g. like `test_data/cdb_aarch64.json`. The config file can be used to
-declare presets based on the compiler:
+declare specific options for different compilers:
 ```json
 {
   "base_dirs": ["/path/to/project/prj", "/path/to/toolchains"],
@@ -241,7 +241,7 @@ the specification with any custom non-existing flag:
   }
 ```
 
-Presets for 'libraries' or compile units can be added by the same method:
+Presets for _'libraries'_ and _compile units_ can be added by the same method:
 ```json
   "flags_by_library": {
     "lib": ["DLIB_DEFINE=1", "pedantic"]
@@ -252,13 +252,154 @@ Presets for 'libraries' or compile units can be added by the same method:
   }
 ```
 
-Use _verbose mode_ with `-v` option to get details about
+### Selective configuration with layers
+
+Layered configuration provides and advanced method compared to
+'choose one' lists:
+- Flag expectations of matching layers are _aggregated_
+  (instead of using the first-fit method). This makes possible to define expectations
+  an _additive_ way.
+- Layers make possible to _drop previously defined flag expectations_ to manage exceptions.
+- Each layer can use a _combined match criteria_ of compiler, library and file settings.
+- Layers have _name_ to improve semantics
+
+E.g.
+```json
+{
+  "layers": [
+    {
+      "name": "library flags",
+      "libraries": ["lib"],
+      "flags": ["-DLIB_DEFINE=1", "-Wextra"]
+    },
+    {
+      "name": "strict setup for C++",
+      "files": ["**/*.cpp"],
+      "flags": ["-Wextra", "-pedantic"]
+    },
+    {
+      "name": "permissive setup for generated files",
+      "files": ["**/*_gen.*"],
+      "drop_flags": ["-Wextra", "-pedantic"],
+      "flags": ["-Wno-format"]
+    }
+  ]
+}
+```
+
+This sets up expectations like
+
+File in library        | `-DLIB_DEFINE=1` | `-Wextra` | `-pedantic` | `-Wno-format`
+-----------------------|------------------|-----------|-------------|--------------
+`foo.c` in `lib`       | Yes              | Yes       | -           | -
+`foo.cpp` in `lib`     | Yes              | Yes       | Yes         | -
+`foo_gen.c` in `lib`   | Yes              | -         | -           | Yes
+`foo_gen.cpp` in `lib` | Yes              | -         | -           | Yes
+`foo.c` in `bin`       | -                | -         | -           | -
+`foo.cpp` in `bin`     | -                | Yes       | Yes         | -
+`foo_gen.c` in `bin`   | -                | -         | -           | Yes
+`foo_gen.cpp` in `bin` | -                | -         | -           | Yes
+
+> Note that ordering of layers matters - a dropped flag may be reintroduced
+> in a following layer.
+
+### Flag presets and references
+
+Configuration can include named flag lists called 'presets'.
+These can be referenced anywhere to replace flag definitions and
+can be mixed with flags. This provides an abstraction method to avoid
+redundant and recurring definition of flag sets.
+
+```json
+{
+  "presets": {
+    "basic": ["-Wextra"],
+    "strict": ["$basic", "-pedantic"],
+    "permissive": ["-Wno-format"]
+  },
+  "layers": [
+    {
+      "name": "library flags",
+      "libraries": ["lib"],
+      "flags": ["$basic", "-DLIB_DEFINE=1"]
+    },
+    {
+      "name": "strict setup for C++",
+      "files": ["**/*.cpp"],
+      "flags": ["$strict"]
+    },
+    {
+      "name": "permissive setup for generated files",
+      "files": ["**/*_gen.*"],
+      "drop_flags": ["$strict"],
+      "flags": ["$permissive"]
+    }
+  ]
+}
+```
+
+> References are strings simply starting with `$`. The config above
+> resolves to the same setup as the previous one.
+
+### Health check
+
+The tool automatically detects and reports _duplicate_ and _contradicting_
+compiler options for several cases. For example
+- passing `--sysroot=` multiple times is reported as
+  ```
+  [...]/src/test_c.c: Duplicate(s) found of --sysroot=...
+  ```
+- using `-fomit-frame-pointer` and `-fno-omit-frame-pointer` at the same time
+  is reported as
+  ```
+  [...]/src/test_c.c: Contradicting options of -fomit-frame-pointer
+  ```
+
+Health check can be configured with the `--consistency N` option, where
+- `N == 0` disables the feature
+- `N == 1` enables the check of contradicting options (default)
+- `N == 2` also enables the duplicate checks
+
+### Output setup
+
+Use the `-s` flag to create a __summary__ of violations, collected by flags.
+
+Normal output:
+```
+[...]/src/lib/file1.cpp: Missing flag '-g1'
+[...]/src/lib/file2.cpp: Missing flag '-g1'
+[...]/src/lib/file3.cpp: Missing flag '-DLIB_DEFINE=1'
+[...]/src/lib/file3.cpp: Missing flag '-g1'
+[...]/src/lib/file4_gen.cpp: Missing flag '-Wno-format'
+[...]/src/lib/file4_gen.cpp: Missing flag '-DLIB_DEFINE=1'
+[...]/src/lib/file4_gen.cpp: Missing flag '-g1'
+[...]/src/file5_gen.cpp: Missing flag '-g1'
+[...]/src/file6.c: Missing flag '-g1'
+```
+
+Summary:
+```
+Missing flag '-g1': 6 issue(s) in
+  [...]/src/lib/file2.cpp
+  [...]/src/file5_gen.cpp
+  [...]/src/lib/file1.cpp
+  [...]/src/lib/file4_gen.cpp
+  [...]/src/lib/file3.cpp
+  ... and 1 more
+Missing flag '-DLIB_DEFINE=1': 2 issue(s) in
+  [...]/src/lib/file3.cpp
+  [...]/src/lib/file4_gen.cpp
+Missing flag '-Wno-format': 1 issue(s) in
+  [...]/src/lib/file4_gen.cpp
+```
+
+Use __verbose mode__ with `-v` option to get details about
 the effective configuration and matching results. This will produce
 output like
 ```
 cdb-check - running in verbose mode
 Configuration:
-{'base_dirs': ['/path/to/project/prj', '/path/to/toolchains'], 'libraries': [], 'compile_units': [], 'flags': ['Wall', 'Wextra', 'g', 'I[...]/include'], 'verbose': True, 'flags_by_compiler': {'**/aarch64-oe-linux-*': ['finline-limit=64', 'D__ARM_PCS_VFP']}, 'flags_by_library': {'lib': ['DLIB_DEFINE=1', 'pedantic']}, 'flags_by_file': {'**/*.c': ['std=c11'], '**/*.cpp': ['std=c++11', 'pedantic']}, 'extra': {'input': 'test_data/cdb_aarch64.json', 'config': 'test_data/cfg_complex_preset.json', 'dump': False}}
+{'base_dirs': ['/path/to/project/prj', '/path/to/toolchains'], 'libraries': [], 'compile_units': [], 'flags': ['Wall', 'Wextra', 'g', 'I[...]/include'], 'verbose': True, 'flags_by_compiler': {'**/aarch64-oe-linux-*': ['finline-limit=64', 'D__ARM_PCS_VFP']}, 'flags_by_library': {'lib': ['DLIB_DEFINE=1', 'pedantic']}, 'flags_by_file': {'**/*.c': ['std=c11'], '**/*.cpp': ['std=c++11', 'pedantic']}, 'extra': {'input': 'test_data/cdb_aarch64.json', 'config': 'test_data/cfg_complex.json', 'dump': False}}
 Checking test_data/cdb_aarch64.json ...
 Checking 4 entries(s) ...
 Entry [...]/src/lib/file1.cpp ...
@@ -273,7 +414,9 @@ All flags found
 ...
 ```
 
-#### Property matching methods
+## Details
+
+### Property matching methods
 
 __Flag matching__ supports to pass flags without the leading `-` prefix.
 This helps to pass CLI args easier. Because of this flag matching works like
@@ -333,38 +476,19 @@ is disallowed_ here.
 > and an executable target `foo`. The pattern `foo-*` will match the libraries
 > but not the executable.
 
-#### Health check
-
-The tool automatically detects and reports _duplicate_ and _contradicting_
-compiler options for several cases. For example
-- passing `--sysroot=` multiple times is reported as
-  ```
-  [...]/src/test_c.c: Duplicate(s) found of --sysroot=...
-  ```
-- using `-fomit-frame-pointer` and `-fno-omit-frame-pointer` at the same time
-  is reported as
-  ```
-  [...]/src/test_c.c: Contradicting options of -fomit-frame-pointer
-  ```
-
-Health check can be configured with the `--consistency N` option, where
-- `N == 0` disables the feature
-- `N == 1` enables the check of contradicting options (default)
-- `N == 2` also enables the duplicate checks
-
-### Configuration
+### Effective configuration
 
 An overview of configuration options for processing:
 
-Option        | from CLI | from config file | Description
---------------|----------|------------------|-----------------------------
-Basic flags   | Y        | Y                | Common flags to check on all
-Flag presets  | N        | Y                | Specific flags, additional to the common set
-Base dirs     | Y        | Y                | Directory prefixes to remove
-Compile units | Y        | Y                | Scope check to the specified files
-Libraries     | Y        | Y                | Scope check to the specified logical libraries
+Option          | from CLI | from config file | Description
+----------------|----------|------------------|-----------------------------
+Base dirs       | Y        | Y                | Directory prefixes to remove
+Compile units   | Y        | Y                | Scope check to the specified files
+Libraries       | Y        | Y                | Scope check to the specified logical libraries
+Basic flags     | Y        | Y                | Common flags to check on all
+Selective flags | N        | Y                | Flags applied conditionally, additional to the common set
 
-All above but flag presets are lists. Options can be provided
+All above but _selective flags_ are lists. Options can be provided
 from CLI and config file at the same time, in this case the options are
 appended, i.e. both CLI and file options are applied.
 
@@ -385,7 +509,7 @@ cus_to_check = (cfg.compile_units + args.compile_units) or CHECK_ALL
 
 scope_of_check = []
 for entry in cdb:
-    if match(entry, libs_to_check) and match(entry, cus_to_check):
+    if match_list(entry, libs_to_check) and match_list(entry, cus_to_check):
       scope_of_check.append(entry)
 ```
 
@@ -394,21 +518,33 @@ The flags to check for a single compilation are:
 # basic flags
 flags = cfg.flags + args.flags
 # flags by compiler
-flags += select_preset(cfg.flags_by_compiler, entry)
+flags += select_from_lists(cfg.flags_by_compiler, entry)
 # flags by library
-flags += select_preset(cfg.flags_by_library, entry)
+flags += select_from_lists(cfg.flags_by_library, entry)
 # flags by compile unit name
-flags += select_preset(cfg.flags_by_file, entry)
+flags += select_from_lists(cfg.flags_by_file, entry)
+# apply layers
+flags = apply_flags_by_layers(cfg.layers, entry, flags)
 ```
 
-where `select_preset` is a _first-fit_ method with
+where `select_from_lists` is a _first-fit_ method with
 fallback to the wildcard `*` preset:
 ```py
-for p in presets:
-    if match(entry, p):
-        return presets[p]   # select 'p' on match, or
-if '*' presets:
-    return presets['*']     # select default if present, or
+for l in flag_lists:
+    if match_list(entry, l):
+        return flag_lists[l]  # select 'p' on match, or
+if '*' flag_lists:
+    return flag_lists['*']    # select default if present, or
 else:
-    return []               # select none
+    return []                 # select none
+```
+
+and `apply_flags_by_layers` is a repeated _drop-and-add_ method
+for all matching layers:
+```py
+for l in layers:
+    if match_layer(entry, l):
+        flags = drop(flags, l.drop_flags)
+        flags += l.flags
+return flags
 ```

@@ -17,7 +17,12 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pytest
+          pip install pytest dataclasses-jsonschema
+      - name: Check config schema
+        run: |
+          ./generate_config_schema.py
+          git diff --color
+          test ! -n "`git status --porcelain`"
       - name: Test with pytest
         run: |
           pytest test_*.py --junitxml=junit/test-results.xml
