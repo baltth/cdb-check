@@ -1,0 +1,44 @@
+base_dirs:
+  - /path/to/project/prj
+  - /path/to/toolchains
+flags:
+  - -Wall
+  - -Wextra
+  - -g1
+  - -I[...]/include
+flags_by_compiler:
+  '**/aarch64-oe-linux-*':
+    - -finline-limit=64
+    - -D__ARM_PCS_VFP
+flags_by_file:
+  '**/*.c':
+    - -std=c11
+  '**/*.cpp':
+    - -std=c++11
+presets:
+  basic:
+    - -Wextra
+  strict:
+    - $basic
+    - -pedantic
+  permissive:
+    - -Wno-format
+layers:
+  - name: library flags
+    libraries:
+      - lib
+    flags:
+      - $basic
+      - -DLIB_DEFINE=1
+  - name: strict setup for C++
+    files:
+      - '**/*.cpp'
+    flags:
+      - $strict
+  - name: permissive setup for generated files
+    files:
+      - '**/*_gen.*'
+    drop_flags:
+      - $strict
+    flags:
+      - $permissive

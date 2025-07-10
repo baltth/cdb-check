@@ -890,11 +890,28 @@ def update_config(cfg: Config,
     return updated
 
 
+def load_yaml_config(f) -> Dict:
+
+    # It's ugly but I decided to use a local import here as
+    # didn't want to introduce dependency to a non-default package
+    # unless it's used.
+    import yaml
+
+    cfg = yaml.safe_load(f)
+    if not isinstance(cfg, dict):
+        raise ValueError('Invalid config file')
+    return cfg
+
+
 def load_config(file: str) -> Dict:
     """
     Load config file to a dictionary.
     """
     with open(file) as f:
+
+        if file.endswith('.yaml') or file.endswith('.yml'):
+            return load_yaml_config(f)
+
         cfg = json.load(f)
         if not isinstance(cfg, dict):
             raise ValueError('Invalid config file')
@@ -915,7 +932,7 @@ def arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     parser.description = "Tool to verify C/C++ build configuration. See README.md for details."
     parser.add_argument('input', help='Compile DB file (compile_commands.json)')
-    parser.add_argument('-c', '--config', help='Config file')
+    parser.add_argument('-c', '--config', help='Config file (JSON/YAML)')
 
     parser.add_argument('-f', '--flags', nargs='+', help='Flags to check, passed without \'-\' prefix')
     parser.add_argument('--consistency',

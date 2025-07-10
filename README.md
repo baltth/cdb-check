@@ -33,8 +33,10 @@ Checking 14 entries(s) ...
 This tool is intended to be a _simple utility script,_ I do not plan to create
 a package nor to add an installer. Just download and use it.
 
-Dependencies: _Python 3_ and nothing else. Tested on Ubuntu 24.04 with
+Dependencies:
+- for basic operation: _Python 3_ and nothing else. Tested on Ubuntu 24.04 with
 a standard _Python 3.12.3_ installation
+- for using _YAML configuration_: `pyyaml`, tested with 6.0.2
 
 ## Usage
 
@@ -204,6 +206,9 @@ Some _common use cases_ for the tool:
   # - check for '-pedantic' and definitions in library
   ./cdb_check.py -c test_data/cfg.json test_data/cdb.json -l lib -f DLIB_DEFINE=1
   ```
+
+The program also accepts _YAML_ configuration files, in this case
+the `pyyaml` package shall be installed.
 
 ### Selective configuration with 'choose one' lists
 
