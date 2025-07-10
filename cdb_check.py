@@ -607,30 +607,6 @@ def get_matching_layers(layers: List[Layer], entry: CdbEntry) -> List[Layer]:
     return [l for l in layers if is_matching_layer(l, entry)]
 
 
-def get_flags_by_layers(cfg: Config, entry: CdbEntry) -> List[str]:
-    """
-    Fetch flags for the matching layers predefined in the configuration.
-
-    Args:
-        cfg: Config
-        entry: CdbEntry
-
-    Returns:
-        List[str]: Flags aggregated from all matching layers
-    """
-    if not cfg.layers:
-        return []
-    logger = logging.getLogger()
-    logger.debug('Checking for matching layers ...')
-    matching = get_matching_layers(cfg.layers, entry)
-    flags = []
-    for i, m in enumerate(matching):
-        name = m.name if m.name else f'#{i}'
-        logging.getLogger().debug(f'  ... matching: {name}')
-        flags.extend(m.flags)
-    return flags
-
-
 def resolve_preset_refs(presets: Dict[str, List[str]], flags: List[str]) -> List[str]:
     if not flags:
         return []
@@ -642,6 +618,38 @@ def resolve_preset_refs(presets: Dict[str, List[str]], flags: List[str]) -> List
         front = [flags[0]]
 
     return front + resolve_preset_refs(presets, flags[1:])
+
+
+def apply_flags_by_layers(cfg: Config, entry: CdbEntry, flags: List[str]) -> List[str]:
+    """
+    Fetch flags for the matching layers predefined in the configuration.
+
+    Args:
+        cfg: Config
+        entry: CdbEntry
+        flags: Collected flag set before applying layers
+
+    Returns:
+        List[str]: Flags aggregated from all matching layers
+    """
+
+    def resolve_refs(f: List[str]) -> List[str]:
+        return resolve_preset_refs(cfg.presets, f)
+
+    flags = resolve_refs(flags)
+    if not cfg.layers:
+        return flags
+
+    logger = logging.getLogger()
+    logger.debug('Checking for matching layers ...')
+    matching = get_matching_layers(cfg.layers, entry)
+    for i, m in enumerate(matching):
+        name = m.name if m.name else f'#{i}'
+        logging.getLogger().debug(f'  ... matching: {name}')
+
+        flags = [f for f in flags if f not in resolve_refs(m.drop_flags)]
+        flags.extend(resolve_refs(m.flags))
+    return flags
 
 
 def get_relevant_flags(cfg: Config, entry: CdbEntry) -> List[str]:
@@ -658,9 +666,9 @@ def get_relevant_flags(cfg: Config, entry: CdbEntry) -> List[str]:
     to_check = cfg.flags \
         + get_flags_by_compiler(cfg, entry.compiler) \
         + get_flags_by_library(cfg, entry.out_file) \
-        + get_flags_by_file(cfg, entry.file) \
-        + get_flags_by_layers(cfg, entry)
-    return dedup(resolve_preset_refs(cfg.presets, to_check))
+        + get_flags_by_file(cfg, entry.file)
+    to_check = apply_flags_by_layers(cfg, entry, to_check)
+    return dedup(to_check)
 
 
 @dataclass

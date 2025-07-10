@@ -609,12 +609,6 @@ def test_get_matching_layers():
     assert get_matching_layers(ALL_LAYERS, TEST_ENTRY_2) == [LIBRARY_LAYER, FILE_LAYER]
 
 
-def test_get_flags_by_layers():
-
-    CFG = Config(layers=[LIBRARY_LAYER, QCC_COMPILER_LAYER, FILE_LAYER])
-    assert get_flags_by_layers(CFG, TEST_ENTRY_2) == LIBRARY_LAYER.flags + FILE_LAYER.flags
-
-
 def test_resolve_preset_refs():
 
     PRESETS = {
@@ -629,6 +623,58 @@ def test_resolve_preset_refs():
     assert resolve_preset_refs(PRESETS, ['A1', 'A2']) == ['A1', 'A2']
     assert resolve_preset_refs(PRESETS, ['A1', '$p1']) == ['A1', 'A1', 'A0']
     assert resolve_preset_refs(PRESETS, ['$p_ref', 'A4']) == ['A1', 'A2', 'A3', 'A4']
+
+
+def test_apply_flags_by_layers_no_layers():
+
+    PRESETS = {
+        'p1': ['P1'],
+        'p2': ['P2'],
+        'p_ref': ['PR', '$p2']
+    }
+
+    assert apply_flags_by_layers(Config(), TEST_ENTRY_2, ['D3']) == ['D3']
+    assert apply_flags_by_layers(Config(presets=PRESETS), TEST_ENTRY_2, ['D3', '$p2']) == ['D3', 'P2']
+
+
+def test_apply_flags_by_layers():
+
+    PRESETS = {
+        'p1': ['P1'],
+        'p2': ['P2'],
+        'p_ref': ['PR', '$p2']
+    }
+
+    LAYER_1 = Layer(name='',
+                    files=['**/*2.c', '**/*2.cpp'],
+                    flags=['$p2', 'A2'])
+
+    LAYER_2 = Layer(name='',
+                    libraries=['lib', 'another_lib'],
+                    flags=['A2', 'A3'],
+                    drop_flags=['$p_ref', 'A1'])
+
+    LAYER_3_NA = Layer(name='',
+                       compilers=['**/*qcc'],
+                       flags=['A3', 'A4'])
+
+    LAYER_4 = Layer(name='',
+                    files=['**/*2.c', '**/*2.cpp'],
+                    flags=['$p1'])
+
+    cfg = Config(presets=PRESETS,
+                 layers=[LAYER_1])
+    assert apply_flags_by_layers(cfg, TEST_ENTRY_2, ['A1']) == ['A1', 'P2', 'A2']
+
+    cfg.layers = [LAYER_1,
+                  LAYER_2]
+    assert apply_flags_by_layers(cfg, TEST_ENTRY_2, ['A1']) == ['A2', 'A2', 'A3']
+
+    cfg.layers = [LAYER_1,
+                  LAYER_2,
+                  LAYER_3_NA,
+                  LAYER_4]
+    assert apply_flags_by_layers(cfg, TEST_ENTRY_2, ['A1']) == ['A2', 'A2', 'A3', 'P1']
 
 
 def test_get_relevant_flags():
