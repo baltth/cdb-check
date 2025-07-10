@@ -171,16 +171,22 @@ def dedup(l: List) -> List:
     return res
 
 
-def to_entry(command: Dict[str, str]) -> CdbEntry:
+def to_entry(command: Dict[str, Union[str, List[str]]]) -> CdbEntry:
     """
     Convert a dictionary loaded from a CDB to a CdbEntry.
     Compiler, compile argument and object file properties are split from
     'command' or 'arguments' field.
     """
+
+    assert isinstance(command['file'], str)
+    assert isinstance(command['directory'], str)
+
     if 'command' in command.keys():
+        assert isinstance(command['command'], str)
         cmd = split(command['command'])
     else:
         assert 'arguments' in command.keys()
+        assert isinstance(command['arguments'], list)
         cmd = command['arguments']
 
     assert len(cmd) >= 2
