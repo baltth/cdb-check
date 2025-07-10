@@ -1,4 +1,5 @@
 {
+  "$schema": "../config.schema.json",
   "base_dirs": ["/path/to/project/prj", "/path/to/toolchains"],
   "flags": ["Wall", "Wextra", "g", "I[...]/include"],
   "flags_by_compiler": {
