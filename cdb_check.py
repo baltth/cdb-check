@@ -23,7 +23,7 @@ __author__ = "Balazs Toth"
 __email__ = "baltth@gmail.com"
 __copyright__ = "Copyright 2025, Balazs Toth"
 __license__ = "MIT"
-__version__ = "0.3.0"
+__version__ = "0.5.1"
 
 
 def path_wildcards_to_regex(path: str) -> str:
@@ -42,7 +42,8 @@ def path_wildcards_to_regex(path: str) -> str:
 
     REC_WILDCARD = '**'
     REC_WILDCARD_PATTERN = '(/.+)?'
-    REC_WILDCARD_PATTERN_NO_SLASH = '(.+)?'
+    REC_WILDCARD_PATTERN_LEADING = '(.*/)?'
+    REC_WILDCARD_PATTERN_STANDALONE = '.+'
 
     WILDCARD = '*'
     WILDCARD_PATTERN = f'{NON_SEP}*'
@@ -99,8 +100,10 @@ def path_wildcards_to_regex(path: str) -> str:
     # - remove extra `/` before recursive wildcards, added by join()
     r = r.replace('/' + REC_WILDCARD_PATTERN, REC_WILDCARD_PATTERN)
     # - remove `/` of leading recursive wildcard
-    if r.startswith(REC_WILDCARD_PATTERN):
-        r = r.replace(REC_WILDCARD_PATTERN, REC_WILDCARD_PATTERN_NO_SLASH, 1)
+    if r.startswith(REC_WILDCARD_PATTERN + '/'):
+        r = r.replace(REC_WILDCARD_PATTERN + '/', REC_WILDCARD_PATTERN_LEADING, 1)
+    elif r == REC_WILDCARD_PATTERN:
+        r = REC_WILDCARD_PATTERN_STANDALONE
     return r
 
 

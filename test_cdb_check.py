@@ -17,8 +17,8 @@ def test_path_wildcards_to_regex():
     assert path_wildcards_to_regex('abc/**') == 'abc(/.+)?'
     assert path_wildcards_to_regex('abc/**/c') == 'abc(/.+)?/c'
     assert path_wildcards_to_regex('abc/**/b/**') == 'abc(/.+)?/b(/.+)?'
-    assert path_wildcards_to_regex('**/a') == '(.+)?/a'
-    assert path_wildcards_to_regex('**') == '(.+)?'
+    assert path_wildcards_to_regex('**/a') == '(.*/)?a'
+    assert path_wildcards_to_regex('**') == '.+'
 
     assert path_wildcards_to_regex('ab?/a') == 'ab[^/]/a'
 
@@ -100,6 +100,15 @@ def test_match_path_recursive_wildcard():
     assert match_path(r, 'abc/b/a')
     assert match_path(r, 'abc/x/b')
     assert match_path(r, 'abc/x/b/c/d')
+
+    r = '**/b/**/*.cpp'
+
+    assert not match_path(r, 'abc/b')
+    assert match_path(r, 'abc/b/e.cpp')
+    assert match_path(r, 'abc/b/c/d/e.cpp')
+    assert match_path(r, 'b/c/d/e.cpp')
+    assert match_path(r, 'b/e.cpp')
+    assert match_path(r, '/b/e.cpp')
 
 
 def test_match_path_any_char():
