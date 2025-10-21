@@ -70,8 +70,8 @@ echo "---"
 
 echo "---"
 echo "Config file with presets and layers, summarized ..."
+echo "(expected to fail)"
 echo "---"
-# expected to fail
 ! ./cdb_check.py -s -c test_data/cfg_layers.json test_data/cdb_layers.json
 
 echo "---"

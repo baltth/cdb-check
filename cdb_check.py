@@ -250,6 +250,11 @@ def normalize_base_dirs(base_dirs: List[str]) -> List[str]:
 
 
 def join_opt_pairs(args: List[str]) -> List[str]:
+    """
+    Join corresponding argument pairs.
+    - `['-a', '-b', 'b_value', '-c']` -> `['-a', '-b b_value', '-c']`
+    """
+
     if len(args) < 2:
         return args
     if args[1].startswith('-'):
@@ -293,30 +298,119 @@ def normalize(entry: CdbEntry,
                     out_file=remove_prefix(entry.out_file))
 
 
-def is_disabler(flag: str) -> bool:
-    return len(flag) > 5 and flag[:5].endswith('no-')
-
-
 def make_enabler(flag: str) -> str:
-    return flag[:2] + flag[5:] if is_disabler(flag) else flag
+    """
+    Get 'enabler' version of a 'disabler' flag or return the original.
+    - `-Wno-unused` -> `-Wunused`
+    - `-Werror` -> `-Werror`
+    """
+    m = re.match(r'^(-[a-zA-Z])no-(.+)', flag)
+    if m:
+        return f'{m.group(1)}{m.group(2)}'
+    return flag
+
+
+MULTI_FLAGS = [
+    '-I',
+    '-idirafter',
+    '-imacros ',
+    '-imultilib ',
+    '-iplugin=',
+    '-iprefix ',
+    '-iquote ',
+    '-isysroot ',
+    '-isystem ',
+    '-iwithprefix ',
+    '-iwithprefixbefore ',
+    '--embed-dir=',
+    '-L',
+    '-l'
+]
+
+
+def match_multi_flag(flag: str) -> str:
+    """
+    Check if a flag is a 'multi flag', i.e.
+    may be applied multiple times.
+
+    Returns:
+        str: the flag itself if multi-flag else empty
+    """
+    for f in MULTI_FLAGS:
+        if flag.startswith(f):
+            return flag
+    return ''
+
+
+def is_multi_flag(flag: str) -> bool:
+    return bool(match_multi_flag(flag))
+
+
+WERROR_FLAGS = ['-Werror', '-Wno-error']
+WERROR_OPT_FLAGS = [f'{f}=' for f in WERROR_FLAGS]
+
+
+def werror_enabled(flags: List[str]) -> bool:
+    """
+    Check if '-Werror' is enables effectively,
+    i.e. not turned off by a -Wno-error switch later.
+    """
+    opts = [f for f in flags if f in WERROR_FLAGS]
+    if opts:
+        return opts[-1] == '-Werror'
+    return False
+
+
+def match_switch_flag(flag: str) -> str:
+    """
+    Associate the logical 'switch group' of a flag.
+    - `-DDEF_=1` -> `-DDEF`
+    - `-UDEF` -> `-DDEF`
+    - `-Wno-error=unused` -> `-Wunused`
+    - `-Wno-error` -> `-Werror`
+    - `--sysroot=a/b/c` -> `--sysroot...`
+    - `-O2` -> `-O...`
+    """
+    assert not is_multi_flag(flag)
+
+    # e.g.
+    # -D_DEF_=1 -> -D_DEF_
+    # -U_DEF_ -> -D_DEF_
+    m = re.search(r'^-[DU]([a-zA-Z_\\][a-zA-Z_\\0-9]*)=?', flag)
+    if m:
+        return '-D' + m.group(1)
+
+    # e.g.
+    # -Wno-error=unused-result -> -Wunused-result
+    if any(flag.startswith(f) for f in WERROR_OPT_FLAGS):
+        return '-W' + flag.split('=')[1]
+
+    # e.g.
+    # --sysroot=/a/b -> --sysroot...
+    # but -fomit-frame-pointer, -O2 etc. remains
+    m = re.search(r'^(--?[a-zA-Z][a-zA-Z0-9_-]*)=', flag)
+    f = f'{m.group(1)}...' if m else flag
+
+    # Handle special switches without assignment
+    if f.startswith('-O'):
+        return '-O...'
+    if re.search(r'^-g[\d]?$', f):
+        return '-g...'
+
+    # -fno-omit-frame-pointer -> -fomit-frame-pointer
+    return make_enabler(f)
 
 
 def collect_flags_by_keys(flags: List[str]) -> Dict[str, List[str]]:
     """
     Collect flags by the logical option they represent.
     """
-    def key_of(f: str):
-        m = re.search(r'^(--?[a-zA-Z][a-zA-Z0-9_-]*=)', f)
-        key = f'{m.group(1)}...' if m else f
-        if key.startswith('-O'):
-            return '-O...'
-        if re.search(r'^-g[\d]?$', key):
-            return '-g...'
-        return make_enabler(key)
 
     res: Dict[str, List[str]] = {}
     for f in flags:
-        key = key_of(f)
+        key = match_multi_flag(f)
+        if not key:
+            key = match_switch_flag(f)
         if key in res.keys():
             res[key].append(f)
         else:
@@ -341,37 +435,56 @@ def get_duplicates(flags: List[str]) -> int:
 
 
 def has_contradiction(flags: List[str]) -> bool:
-    if len(flags) < 2:
-        return False
-    enablers: List[str] = []
-    disablers: List[str] = []
-    for f in flags:
-        if is_disabler(f):
-            disablers.append(make_enabler(f))
-        else:
-            enablers.append(f)
-    return not set(enablers).isdisjoint(set(disablers))
+    return len(set(flags)) != 1
 
 
-def check_consistency_of_collected(flags_by_keys: Dict[str, List[str]], level: ConsistencyLevel) -> Tuple[List[str], List[str]]:
+@dataclass
+class ConsistencyResult:
+    duplicates: List[str] = field(default_factory=list)
+    contra_keys: List[str] = field(default_factory=list)
+    contra_values_to_remove: List[str] = field(default_factory=list)
+
+
+def check_consistency_of_collected(flags_by_keys: Dict[str, List[str]], level: ConsistencyLevel) -> ConsistencyResult:
+    """
+    Consistency check of flags collected to logical groups.
+    """
 
     if level == ConsistencyLevel.NONE:
-        return [], []
+        return ConsistencyResult()
 
-    contra: List[str] = []
+    contra_keys: List[str] = []
+    contra_values_to_remove: List[str] = []
     duplicates: List[str] = []
     for k, v in flags_by_keys.items():
         dup = get_duplicates(v) if level == ConsistencyLevel.ALL else 0
-        if has_contradiction(v):
-            contra.append(k)
+        if not is_multi_flag(k) and has_contradiction(v):
+            contra_keys.append(k)
+            contra_values_to_remove += v[:-1]  # all but the last of exclusive flags have to be removed
         elif dup > 0:
             duplicates.append(k)
-    return contra, duplicates
+    return ConsistencyResult(duplicates=duplicates,
+                             contra_keys=contra_keys,
+                             contra_values_to_remove=contra_values_to_remove)
 
 
-def check_consistency(entry: CdbEntry, level: ConsistencyLevel) -> Tuple[List[str], List[str]]:
+def check_consistency(flags: List[str], level: ConsistencyLevel) -> ConsistencyResult:
+    """
+    Consistency check of a flag list.
 
-    flags_by_keys = collect_flags_by_keys(entry.orig_args)
+    Args:
+        flags: List of flags
+        level: Switch to define the check features.
+
+    Return:
+        ConsistencyResult:
+            Bundle of
+            - the list of flag groups containing with contradiction
+            - the exact flags 'to remove', i.e. flags with no effect due to
+              contradiction options
+            - the list of flags having duplicates
+    """
+    flags_by_keys = collect_flags_by_keys(flags)
     return check_consistency_of_collected(flags_by_keys, level)
 
 
@@ -724,9 +837,11 @@ def check_entry(entry: CdbEntry, cfg: Config, dump: bool = False) -> ResultsByEn
 
     logger.debug(f'Expecting {" ".join(to_check) if to_check else "none"}')
 
-    res = ResultsByEntry()
-    res.contra, res.duplicates = check_consistency(entry, cfg.consistency)
-    res.missing = check_flags(entry, to_check)
+    consistency = check_consistency(entry.orig_args, cfg.consistency)
+
+    res = ResultsByEntry(duplicates=consistency.duplicates,
+                         contra=consistency.contra_keys,
+                         missing=check_flags(entry, to_check))
 
     if has_to_report_entries(cfg):
         report_entry(entry.file, res)
