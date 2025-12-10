@@ -427,6 +427,80 @@ def test_collect_flags_by_keys():
     assert collect_flags_by_keys(FLAGS) == EXPECTED
 
 
+def test_collect_extended_warning_sets():
+
+    FLAGS = [
+        '-fomit-frame-pointer',
+        '-Werror',
+        '-Wno-error=unused',
+        '-Os',
+        '-Wall',
+        '-Wno-array',
+        '-Os',
+        '-Wall',
+        '-Wunused',
+        '-Wno-unused',
+        '-Wno-extra',
+    ]
+
+    res = collect_extended_warning_sets(FLAGS)
+
+    assert res['-Warray'] == ['-Werror', '-Wall', '-Wno-array', '-Wall', '-Wno-extra']
+    assert res['-Wunused'] == ['-Werror', '-Wno-error=unused', '-Wall', '-Wunused', '-Wno-unused', '-Wno-extra']
+
+    assert '-Werror=unused' not in res
+    assert '-Werror' not in res
+    assert '-Wall' not in res
+    assert '-Wextra' not in res
+    assert '-Wno-extra' not in res
+    assert '-Os' not in res
+
+
+def test_get_maybe_ineffective_flags_of_set():
+
+    assert get_maybe_ineffective_flags_of_set(['-Wunused', '-Wno-all'])[0] == ['-Wunused']
+    assert get_maybe_ineffective_flags_of_set(['-Wall', '-Wunused', '-Wno-all', '-Wall'])[0] == ['-Wunused']
+
+    assert get_maybe_ineffective_flags_of_set(['-Wall', '-Wno-unused', '-Werror', '-Wall'])[0] == ['-Wno-unused']
+
+    assert get_maybe_ineffective_flags_of_set(['-Wall', '-Werror=unused', '-Wno-unused'])[0] == ['-Werror=unused']
+    assert get_maybe_ineffective_flags_of_set(['-Wall', '-Werror=unused', '-Wno-all'])[0] == ['-Werror=unused']
+    assert get_maybe_ineffective_flags_of_set(['-Wall', '-Werror=unused', '-Wno-error'])[0] == ['-Werror=unused']
+    assert not get_maybe_ineffective_flags_of_set(['-Wall', '-Werror=unused', '-Werror'])[0]
+
+    assert get_maybe_ineffective_flags_of_set(
+        ['-Wall', '-Werror', '-Wno-error=unused', '-Wno-unused'])[0] == ['-Wno-error=unused']
+    assert get_maybe_ineffective_flags_of_set(
+        ['-Wall', '-Werror', '-Wno-error=unused', '-Wno-all'])[0] == ['-Wno-error=unused']
+    assert get_maybe_ineffective_flags_of_set(
+        ['-Wall', '-Werror', '-Wno-error=unused', '-Werror'])[0] == ['-Wno-error=unused']
+    assert not get_maybe_ineffective_flags_of_set(['-Wall', '-Werror', '-Wno-error=unused', '-Wno-error'])[0]
+
+
+def test_get_maybe_ineffective_flags():
+
+    FLAGS = [
+        '-fomit-frame-pointer',
+        '-Werror',
+        '-Wno-error=unused',    # ineffective due to -Wunused
+        '-Os',
+        '-Wall',
+        '-Wno-array',           # ineffective due to -Wall
+        '-Os',
+        '-Wall',
+        '-Wunused',             # ineffective due to -Wno-extra
+        '-Wno-unused',
+        '-Wno-extra',
+    ]
+
+    res, _ = get_maybe_ineffective_flags(FLAGS)
+
+    assert '-Wno-error=unused' in res
+    assert '-Wno-array' in res
+    assert '-Wunused' in res
+    assert len(res) == 3
+
+
 def test_has_contradiction():
 
     assert not has_contradiction(['-Wa'])

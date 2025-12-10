@@ -327,6 +327,12 @@ MULTI_FLAGS = [
     '-l'
 ]
 
+GENERAL_W_FLAGS = [
+    '-Wall',
+    '-Wextra',
+    '-Werror',
+]
+
 
 def match_multi_flag(flag: str) -> str:
     """
@@ -416,6 +422,98 @@ def collect_flags_by_keys(flags: List[str]) -> Dict[str, List[str]]:
         else:
             res[key] = [f]
     return res
+
+
+def collect_extended_warning_sets(flags: List[str]) -> Dict[str, List[str]]:
+    """
+    Collect `-W` flags
+    - -W(no-)x and -W(no-)error=x together,
+    - along with the general (grouping) switches,
+    - with consecutive duplicates removed
+    """
+
+    flags = [f for f in flags if f.startswith('-W')]
+
+    general_flags: List[str] = []
+    res: Dict[str, List[str]] = {}
+
+    def add_to_all_registered(f: str):
+        for v in res.values():
+            v.append(f)
+
+    for f in flags:
+        key = make_enabler(f)
+        f_is_general = bool(key in GENERAL_W_FLAGS)
+        if key.startswith('-Werror='):
+            key = key.replace('-Werror=', '-W')
+
+        if f_is_general:
+            general_flags.append(f)
+            add_to_all_registered(f)
+        elif key in res.keys():
+            res[key].append(f)
+        else:
+            res[key] = general_flags + [f]
+
+    def reduce(ls: List[str]) -> List[str]:
+        return [ls[0]] + [e for i, e in enumerate(ls[1:]) if e != ls[i]]
+
+    return {k: reduce(v) for k, v in res.items()}
+
+
+def get_maybe_ineffective_flags_of_set(flags: List[str]) -> Tuple[List[str], Dict]:
+    """
+    Analyze flag sequence to identify potentially ineffective specific flags
+    """
+
+    flags_as_enabler = [make_enabler(f) for f in flags]
+    is_enabler = [flags[i] == f for i, f in enumerate(flags_as_enabler)]
+    is_specific = [f not in GENERAL_W_FLAGS for f in flags_as_enabler]
+    is_error = [f.startswith('-Werror') for f in flags_as_enabler]
+
+    cat = list(zip(is_enabler, is_specific, is_error, strict=True))
+
+    CAT_WA = (True, False, False)       # -Wall
+    CAT_WNA = (False, False, False)     # -Wno-all
+    CAT_WX = (True, True, False)        # -Wunused
+    CAT_WNX = (False, True, False)      # -Wno-unused
+    CAT_WE = (True, False, True)        # -Werror
+    CAT_WNE = (False, False, True)      # -Wno-error
+    CAT_WEX = (True, True, True)        # -Werror=unused
+    CAT_WNEX = (False, True, True)      # -Wno-error=unused
+
+    res: List[str] = []
+    for i, f in enumerate(flags):
+        rem = cat[i+1:]
+
+        def in_remaining(remaining, *args) -> bool:
+            return any(flag in args for flag in remaining)
+
+        if ((cat[i] == CAT_WX and CAT_WNA in rem)       # -Wunused -Wno-all
+            or (cat[i] == CAT_WNX and CAT_WA in rem)    # -Wno-unused -Wall
+            # -Werror=unused -Wno-unused|-Wno-all|-Wno-error
+            or (cat[i] == CAT_WEX and in_remaining(rem, CAT_WNX, CAT_WNA, CAT_WNE))
+                # -Wno-error=unused -Wno-unused|-Wno-all|-Werror
+                or (cat[i] == CAT_WNEX and in_remaining(rem, CAT_WNX, CAT_WNA, CAT_WE))):
+            res.append(f)
+
+    return res, {"flags_as_enabler": list(zip(flags_as_enabler, cat))}
+
+
+def get_maybe_ineffective_flags(flags: List[str]) -> Tuple[List[str], Dict]:
+
+    debug = {}
+    res: List[str] = []
+    w_sets = collect_extended_warning_sets(flags)
+    for k, v in w_sets.items():
+        r, dbg = get_maybe_ineffective_flags_of_set(v)
+        res += r
+        if k not in debug:
+            debug[k] = {}
+        debug[k]['collected'] = v
+        debug[k].update(dbg)
+
+    return dedup(res), debug
 
 
 def missing_flag_text(flag: str) -> str:
