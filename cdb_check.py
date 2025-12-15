@@ -7,9 +7,9 @@ Usage: see `cdb_check.py -h` for details.
 """
 
 from dataclasses import dataclass, field, fields, asdict
-from enum import Enum
+from enum import IntEnum
 from pathlib import PurePath, Path
-from typing import List, Dict, Set, Union, Tuple, Callable
+from typing import List, Dict, Set, Union, Tuple, Callable, Any
 from shlex import split
 import argparse
 import copy
@@ -159,10 +159,11 @@ FLAG_BANNED_PREFIX = '!'
 PRESET_REF_PREFIX = '$'
 
 
-class ConsistencyLevel(Enum):
+class ConsistencyLevel(IntEnum):
     NONE = 0
     CONTRADICTING = 1
-    ALL = 2
+    INEFFECTIVE = 2
+    ALL = 3
 
 
 def dedup(l: List) -> List:
@@ -497,7 +498,12 @@ def get_maybe_ineffective_flags_of_set(flags: List[str]) -> Tuple[List[str], Dic
                 or (cat[i] == CAT_WNEX and in_remaining(rem, CAT_WNX, CAT_WNA, CAT_WE))):
             res.append(f)
 
-    return res, {"flags_as_enabler": list(zip(flags_as_enabler, cat))}
+    def to_str(c: Tuple[bool, bool, bool]) -> Tuple[str, str, str]:
+        return ('en' if c[0] else 'dis',
+                'spec' if c[1] else 'gen',
+                'err' if c[2] else 'warn')
+    dbg = {"flag_categories": list(zip(flags, (to_str(c) for c in cat)))} if res else {}
+    return res, dbg
 
 
 def get_maybe_ineffective_flags(flags: List[str]) -> Tuple[List[str], Dict]:
@@ -508,10 +514,10 @@ def get_maybe_ineffective_flags(flags: List[str]) -> Tuple[List[str], Dict]:
     for k, v in w_sets.items():
         r, dbg = get_maybe_ineffective_flags_of_set(v)
         res += r
-        if k not in debug:
-            debug[k] = {}
-        debug[k]['collected'] = v
-        debug[k].update(dbg)
+        if r:
+            debug.setdefault(k, {})
+            debug[k]['collected'] = v
+            debug[k].update(dbg)
 
     return dedup(res), debug
 
@@ -522,6 +528,10 @@ def missing_flag_text(flag: str) -> str:
 
 def contradicting_flag_text(flag: str) -> str:
     return f'Contradicting options of \'{flag}\''
+
+
+def ineffective_flag_text(flag: str) -> str:
+    return f'Flag may have no effect: \'{flag}\''
 
 
 def duplicate_flag_text(flag: str) -> str:
@@ -540,7 +550,8 @@ def has_contradiction(flags: List[str]) -> bool:
 class ConsistencyResult:
     duplicates: List[str] = field(default_factory=list)
     contra_keys: List[str] = field(default_factory=list)
-    contra_values_to_remove: List[str] = field(default_factory=list)
+    maybe_ineffective_flags: List[str] = field(default_factory=list)
+    debug: Dict[str, Any] = field(default_factory=dict)
 
 
 def check_consistency_of_collected(flags_by_keys: Dict[str, List[str]], level: ConsistencyLevel) -> ConsistencyResult:
@@ -552,18 +563,27 @@ def check_consistency_of_collected(flags_by_keys: Dict[str, List[str]], level: C
         return ConsistencyResult()
 
     contra_keys: List[str] = []
-    contra_values_to_remove: List[str] = []
     duplicates: List[str] = []
+
+    debug: Dict[str, Dict[str], Any] = {}
+
+    def add_debug(k: str, v: List[str]):
+        debug.setdefault(k, {})
+        debug[k].setdefault('collected', [])
+        debug[k]['collected'] = v
+
     for k, v in flags_by_keys.items():
         dup = get_duplicates(v) if level == ConsistencyLevel.ALL else 0
         if not is_multi_flag(k) and has_contradiction(v):
             contra_keys.append(k)
-            contra_values_to_remove += v[:-1]  # all but the last of exclusive flags have to be removed
+            add_debug(k, v)
         elif dup > 0:
             duplicates.append(k)
+            add_debug(k, v)
+
     return ConsistencyResult(duplicates=duplicates,
                              contra_keys=contra_keys,
-                             contra_values_to_remove=contra_values_to_remove)
+                             debug=debug)
 
 
 def check_consistency(flags: List[str], level: ConsistencyLevel) -> ConsistencyResult:
@@ -577,13 +597,16 @@ def check_consistency(flags: List[str], level: ConsistencyLevel) -> ConsistencyR
     Return:
         ConsistencyResult:
             Bundle of
-            - the list of flag groups containing with contradiction
-            - the exact flags 'to remove', i.e. flags with no effect due to
-              contradiction options
             - the list of flags having duplicates
+            - the list of flag groups containing contradiction
+            - the list of potentially ineffective flags
     """
     flags_by_keys = collect_flags_by_keys(flags)
-    return check_consistency_of_collected(flags_by_keys, level)
+    res = check_consistency_of_collected(flags_by_keys, level)
+    if level >= ConsistencyLevel.INEFFECTIVE:
+        res.maybe_ineffective_flags, dbg = get_maybe_ineffective_flags(flags)
+        res.debug.update(dbg)
+    return res
 
 
 def check_flag(flag: str, flag_set: List[str]) -> bool:
@@ -896,6 +919,8 @@ class ResultsByEntry:
     missing: List[str] = field(default_factory=list)
     contra: List[str] = field(default_factory=list)
     duplicates: List[str] = field(default_factory=list)
+    maybe_ineffective_flags: List[str] = field(default_factory=list)
+    debug: Dict[str, Dict[str, Any]] = field(default_factory=dict)
 
 
 def has_to_report_entries(cfg: Config) -> bool:
@@ -906,6 +931,8 @@ def report_entry(file: str, res: ResultsByEntry):
     logger = logging.getLogger()
     for f in res.contra:
         logger.warning(f'{file}: {contradicting_flag_text(f)}')
+    for f in res.maybe_ineffective_flags:
+        logger.warning(f'{file}: {ineffective_flag_text(f)}')
     for f in res.duplicates:
         logger.warning(f'{file}: {duplicate_flag_text(f)}')
 
@@ -936,10 +963,15 @@ def check_entry(entry: CdbEntry, cfg: Config, dump: bool = False) -> ResultsByEn
     logger.debug(f'Expecting {" ".join(to_check) if to_check else "none"}')
 
     consistency = check_consistency(entry.orig_args, cfg.consistency)
+    debug = {}
+    if consistency.debug:
+        debug['consistency'] = consistency.debug
 
     res = ResultsByEntry(duplicates=consistency.duplicates,
                          contra=consistency.contra_keys,
-                         missing=check_flags(entry, to_check))
+                         maybe_ineffective_flags=consistency.maybe_ineffective_flags,
+                         missing=check_flags(entry, to_check),
+                         debug=debug)
 
     if has_to_report_entries(cfg):
         report_entry(entry.file, res)
@@ -963,6 +995,8 @@ def add_to_result(res: CheckResult, entry: CdbEntry, by_entry: ResultsByEntry):
         add_one(missing_flag_text(f))
     for f in by_entry.contra:
         add_one(contradicting_flag_text(f))
+    for f in by_entry.maybe_ineffective_flags:
+        add_one(ineffective_flag_text(f))
     for f in by_entry.duplicates:
         add_one(duplicate_flag_text(f))
 
@@ -1139,22 +1173,17 @@ def arg_parser() -> argparse.ArgumentParser:
     Create CLI argument parser.
     """
 
-    def consistency_level(arg) -> ConsistencyLevel:
-        v = int(arg)
-        if v not in [m.value for m in ConsistencyLevel]:
-            raise argparse.ArgumentTypeError(f"Invalid health check level {v}")
-        return ConsistencyLevel(v)
-
     parser = argparse.ArgumentParser()
     parser.description = "Tool to verify C/C++ build configuration. See README.md for details."
     parser.add_argument('input', help='Compile DB file (compile_commands.json)')
     parser.add_argument('-c', '--config', help='Config file (JSON/YAML)')
 
     parser.add_argument('-f', '--flags', nargs='+', help='Flags to check, passed without \'-\' prefix')
-    parser.add_argument('--consistency',
-                        type=consistency_level,
+    parser.add_argument('-cc', '--consistency',
+                        type=lambda x: ConsistencyLevel(int(x)),
+                        choices=[e.value for e in ConsistencyLevel],
                         default=ConsistencyLevel.CONTRADICTING,
-                        help='Consistency check level [0-2, default: 1]')
+                        help=f'Consistency check level [default: {ConsistencyLevel.CONTRADICTING.value}]')
 
     in_opts = parser.add_argument_group('Input configuration')
 

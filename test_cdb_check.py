@@ -525,22 +525,21 @@ def test_check_consistency_of_collected():
     }
 
     CONTRA_KEYS = ['-fomit-frame-pointer', '-O...', '-g...']
-    TO_REMOVE = ['-fomit-frame-pointer', '-fno-omit-frame-pointer', '-O1', '-g']
 
     res = check_consistency_of_collected(COLLECTED, ConsistencyLevel.NONE)
     assert not res.contra_keys
-    assert not res.contra_values_to_remove
     assert not res.duplicates
+    assert not res.maybe_ineffective_flags
 
     res = check_consistency_of_collected(COLLECTED, ConsistencyLevel.CONTRADICTING)
     assert res.contra_keys == CONTRA_KEYS
-    assert res.contra_values_to_remove == TO_REMOVE
     assert not res.duplicates
+    assert not res.maybe_ineffective_flags
 
     res = check_consistency_of_collected(COLLECTED, ConsistencyLevel.ALL)
     assert res.contra_keys == CONTRA_KEYS
-    assert res.contra_values_to_remove == TO_REMOVE
     assert res.duplicates == ['-Werror', '-I/p/t/i', '--sysroot...']
+    assert not res.maybe_ineffective_flags
 
 
 def test_check_consistency():
@@ -554,7 +553,6 @@ def test_check_consistency():
 
     res = check_consistency(F1, ConsistencyLevel.ALL)
     assert res.contra_keys == ['-fomit-frame-pointer', '-DDEF']
-    assert res.contra_values_to_remove == [F1[0], F1[2]]
 
     F2 = [
         '-Werror',
@@ -565,18 +563,28 @@ def test_check_consistency():
 
     res = check_consistency(F2, ConsistencyLevel.ALL)
     assert res.contra_keys == ['-Werror', '-Wunused-result']
-    assert res.contra_values_to_remove == [F2[0], F2[2]]
 
-    F2 = [
+    F3 = [
         '--sysroot=a/b',
         '--sysroot=b/c',
         '-g1',
         '-g',
     ]
 
-    res = check_consistency(F2, ConsistencyLevel.ALL)
+    res = check_consistency(F3, ConsistencyLevel.ALL)
     assert res.contra_keys == ['--sysroot...', '-g...']
-    assert res.contra_values_to_remove == [F2[0], F2[2]]
+
+    F4 = [
+        '-Werror=unused-result',
+        '-Wno-all',
+        '-g1',
+        '-g1',
+    ]
+
+    res = check_consistency(F4, ConsistencyLevel.ALL)
+    assert not res.contra_keys
+    assert res.duplicates == ['-g...']
+    assert res.maybe_ineffective_flags == ['-Werror=unused-result']
 
 
 def test_check_flag_no_prefix():
