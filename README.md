@@ -346,24 +346,38 @@ redundant and recurring definition of flag sets.
 > References are strings simply starting with `$`. The config above
 > resolves to the same setup as the previous one.
 
-### Health check
+### Consistency checks
 
-The tool automatically detects and reports _duplicate_ and _contradicting_
-compiler options for several cases. For example
-- passing `--sysroot=` multiple times is reported as
-  ```
-  [...]/src/test_c.c: Duplicate(s) found of --sysroot=...
-  ```
-- using `-fomit-frame-pointer` and `-fno-omit-frame-pointer` at the same time
-  is reported as
-  ```
-  [...]/src/test_c.c: Contradicting options of -fomit-frame-pointer
-  ```
+The tool automatically detects and reports several inconsistencies or
+misconfigurations of the build setup.
 
-Health check can be configured with the `--consistency N` option, where
-- `N == 0` disables the feature
-- `N == 1` enables the check of contradicting options (default)
-- `N == 2` also enables the duplicate checks
+__Duplicate flags__ (e.g. setting `--sysroot=` or `-O2` multiple times) are reported like
+```
+[...]/src/test_c.c: Duplicate(s) found of --sysroot=...
+```
+
+__Contradicting options__ (i.e. enabling and disabling an option) are detected
+for all switch-like options. E.g. using `-fomit-frame-pointer` and `-fno-omit-frame-pointer`
+at the same time is reported as
+```
+[...]/src/test_c.c: Contradicting options of -fomit-frame-pointer
+```
+
+Specific combinations of diagnostic settings may lead to __ineffective flags__.
+E.g. using `-Wunused -Wno-all` with `clang-20` results no diagnostics for unused
+as the later _grouping option_ disables the preceding _specific option._
+Even worse, this behavior is compiler-dependent. Because of this,
+the tool report 'maybe ineffective' for all cases when a _specific option_
+may be overridden by a later _grouping option._
+
+> Check and diff model of [gcc-13](diag_behavior_gcc-13.md) and [clang-20](diag_behavior_clang-20.md)
+> You can test this for any compiler with `tools/check_diag_behavior.py`.
+
+These checks can be configured with the `--consistency N` option, where
+- `N == 0` disables the features,
+- `N == 1` enables the check of contradicting options (default),
+- `N == 2` additionally enables 'maybe ineffective' checks,
+- `N == 3` additionally enables the duplicate checks.
 
 ### Output setup
 
@@ -404,20 +418,38 @@ output like
 ```
 cdb-check - running in verbose mode
 Configuration:
-{'base_dirs': ['/path/to/project/prj', '/path/to/toolchains'], 'libraries': [], 'compile_units': [], 'flags': ['Wall', 'Wextra', 'g', 'I[...]/include'], 'verbose': True, 'flags_by_compiler': {'**/aarch64-oe-linux-*': ['finline-limit=64', 'D__ARM_PCS_VFP']}, 'flags_by_library': {'lib': ['DLIB_DEFINE=1', 'pedantic']}, 'flags_by_file': {'**/*.c': ['std=c11'], '**/*.cpp': ['std=c++11', 'pedantic']}, 'extra': {'input': 'test_data/cdb_aarch64.json', 'config': 'test_data/cfg_complex.json', 'dump': False}}
-Checking test_data/cdb_aarch64.json ...
-Checking 4 entries(s) ...
+Config(base_dirs=['/path/to/project/prj'],
+       libraries=[],
+       compile_units=[],
+       flags=['Wall', 'Wextra', 'Werror=unused'],
+       flags_by_compiler={},
+       flags_by_library={},
+       flags_by_file={},
+       presets={},
+       layers=[],
+       consistency=<ConsistencyLevel.ALL: 3>,
+       verbose=True,
+       very_verbose=False,
+       summary=False,
+       extra={'input': 'test_data/cdb_inconsistent.json',
+              'config': 'test_data/cfg_unused.json',
+              'dump': False})
+Checking test_data/cdb_inconsistent.json ...
+Checking 6 entries(s) ...
+
+--------
 Entry [...]/src/lib/file1.cpp ...
-Checking for flag preset by compiler ...
-  ... matching: **/aarch64-oe-linux-*
-Checking for flag preset by library ...
-  ... matching: lib
-Checking for flag preset by file name ...
-  ... matching: **/*.cpp
-Expecting Wall Wextra g I[...]/include finline-limit=64 D__ARM_PCS_VFP DLIB_DEFINE=1 pedantic std=c++11
-All flags found
+Expecting ['Wall', 'Wextra', 'Werror=unused']
+
+[...]/src/lib/file1.cpp: Contradicting options of '-Wall'
+[...]/src/lib/file1.cpp: Flag may have no effect: '-Werror=unused'
+
+All expected flags present but may be ineffective
+
 ...
 ```
+
+Use __very verbose mode__ with `-vv` option to get additional debug data.
 
 ## Details
 

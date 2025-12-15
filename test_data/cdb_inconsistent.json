@@ -1,0 +1,97 @@
+[
+  {
+    "directory": "/path/to/project/prj/build",
+    "arguments": [
+      "/usr/bin/c++",
+      "-DLIB_DEFINE=1",
+      "-I/path/to/project/prj/include",
+      "-Wall",
+      "-Wextra",
+      "-Werror=unused",
+      "-Wno-all",
+      "-o",
+      "CMakeFiles/lib.dir/src/lib/file1.cpp.o",
+      "-c",
+      "/path/to/project/prj/src/lib/file1.cpp"
+    ],
+    "file": "/path/to/project/prj/src/lib/file1.cpp"
+  },
+  {
+    "directory": "/path/to/project/prj/build",
+    "arguments": [
+      "/usr/bin/c++",
+      "-DLIB_DEFINE=1",
+      "-I/path/to/project/prj/include",
+      "-Wall",
+      "-Wextra",
+      "-Werror=unused",
+      "-o",
+      "CMakeFiles/lib.dir/src/lib/file2.cpp.o",
+      "-c",
+      "/path/to/project/prj/src/lib/file2.cpp"
+    ],
+    "file": "/path/to/project/prj/src/lib/file2.cpp"
+  },
+  {
+    "directory": "/path/to/project/prj/build",
+    "arguments": [
+      "/usr/bin/c++",
+      "-I/path/to/project/prj/include",
+      "-Werror=unused",
+      "-Wall",
+      "-Wextra",
+      "-o",
+      "CMakeFiles/lib.dir/src/lib/file3.cpp.o",
+      "-c",
+      "/path/to/project/prj/src/lib/file3.cpp"
+    ],
+    "file": "/path/to/project/prj/src/lib/file3.cpp"
+  },
+  {
+    "directory": "/path/to/project/prj/build",
+    "arguments": [
+      "/usr/bin/c++",
+      "-I/path/to/project/prj/include",
+      "-Wall",
+      "-Wextra",
+      "-Werror=unused",
+      "-o",
+      "CMakeFiles/lib.dir/src/lib/file4_gen.cpp.o",
+      "-c",
+      "/path/to/project/prj/src/lib/file4_gen.cpp"
+    ],
+    "file": "/path/to/project/prj/src/lib/file4_gen.cpp"
+  },
+  {
+    "directory": "/path/to/project/prj/build",
+    "arguments": [
+      "/usr/bin/c++",
+      "-I/path/to/project/prj/include",
+      "-Wextra",
+      "-Werror=unused",
+      "-Wno-format",
+      "-Wall",
+      "-o",
+      "CMakeFiles/prj.dir/src/file5_gen.cpp.o",
+      "-c",
+      "/path/to/project/prj/src/file5_gen.cpp"
+    ],
+    "file": "/path/to/project/prj/src/file5_gen.cpp"
+  },
+  {
+    "directory": "/path/to/project/prj/build",
+    "arguments": [
+      "/usr/bin/gcc",
+      "-I/path/to/project/prj/include",
+      "-Wall",
+      "-Wextra",
+      "-Werror=unused",
+      "-Wno-error",
+      "-o",
+      "CMakeFiles/prj.dir/src/file6.c.o",
+      "-c",
+      "/path/to/project/prj/src/file6.c"
+    ],
+    "file": "/path/to/project/prj/src/file6.c"
+  }
+]

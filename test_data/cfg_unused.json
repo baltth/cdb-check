@@ -1,0 +1,5 @@
+{
+  "$schema": "../config.schema.json",
+  "base_dirs": ["/path/to/project/prj"],
+  "flags": ["Wall", "Wextra", "Werror=unused"]
+}

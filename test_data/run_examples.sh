@@ -75,4 +75,10 @@ echo "---"
 ! ./cdb_check.py -s -c test_data/cfg_layers.json test_data/cdb_layers.json
 
 echo "---"
+echo "Consistency checks ..."
+echo "(expected to fail)"
+echo "---"
+! ./cdb_check.py -c test_data/cfg_unused.json test_data/cdb_inconsistent.json --consistency 3 -vv
+
+echo "---"
 popd
