@@ -9,6 +9,7 @@ Usage: see `cdb_check.py -h` for details.
 from dataclasses import dataclass, field, fields, asdict
 from enum import IntEnum
 from pathlib import PurePath, Path
+import pprint
 from typing import List, Dict, Set, Union, Tuple, Callable, Any
 from shlex import split
 import argparse
@@ -157,6 +158,8 @@ FLAG_REGEX_PREFIX = '#'
 FLAG_BANNED_PREFIX = '!'
 
 PRESET_REF_PREFIX = '$'
+
+LOG_SEPARATOR = "\n--------"
 
 
 class ConsistencyLevel(IntEnum):
@@ -740,6 +743,7 @@ class Config:
     layers: List[Layer] = field(default_factory=list)
     consistency: ConsistencyLevel = field(default=ConsistencyLevel.NONE)
     verbose: bool = False
+    very_verbose: bool = False
     summary: bool = False
     extra: Dict[str, Union[bool, str, List[str]]] = field(default_factory=dict)
 
@@ -924,23 +928,33 @@ class ResultsByEntry:
 
 
 def has_to_report_entries(cfg: Config) -> bool:
-    return cfg.verbose or not cfg.summary
+    return cfg.verbose or cfg.very_verbose or not cfg.summary
 
 
-def report_entry(file: str, res: ResultsByEntry):
+def report_entry(file: str, res: ResultsByEntry, cfg: Config):
     logger = logging.getLogger()
-    for f in res.contra:
-        logger.warning(f'{file}: {contradicting_flag_text(f)}')
-    for f in res.maybe_ineffective_flags:
-        logger.warning(f'{file}: {ineffective_flag_text(f)}')
-    for f in res.duplicates:
-        logger.warning(f'{file}: {duplicate_flag_text(f)}')
 
-    if not res.missing:
-        logger.debug('All expected flags OK')
+    missing_lines = [f'{file}: {missing_flag_text(f)}' for f in res.missing]
+    cons_lines = [f'{file}: {contradicting_flag_text(f)}' for f in res.contra]
+    cons_lines += [f'{file}: {ineffective_flag_text(f)}' for f in res.maybe_ineffective_flags]
+    cons_lines += [f'{file}: {duplicate_flag_text(f)}' for f in res.duplicates]
+
+    if cons_lines:
+        logger.debug('')
+        logger.warning('\n'.join(cons_lines))
+
+    if missing_lines:
+        logger.debug('')
+        logger.warning('\n'.join(missing_lines))
+    elif not cons_lines:
+        logger.debug('\nAll expected flags OK')
     else:
-        for f in res.missing:
-            logger.warning(f'{file}: {missing_flag_text(f)}')
+        logger.debug('\nAll expected flags present but may be ineffective')
+
+    if cfg.very_verbose and res.debug.get('consistency', {}):
+        logger.debug('\nDebug data of consistency check result:')
+        dbg = pprint.pformat(res.debug['consistency'], width=100, sort_dicts=False)
+        logger.debug(dbg)
 
 
 def check_entry(entry: CdbEntry, cfg: Config, dump: bool = False) -> ResultsByEntry:
@@ -952,6 +966,7 @@ def check_entry(entry: CdbEntry, cfg: Config, dump: bool = False) -> ResultsByEn
     """
 
     logger = logging.getLogger()
+    logger.debug(LOG_SEPARATOR)
     logger.debug(f'Entry {entry.file} ...')
 
     to_check = get_relevant_flags(cfg, entry)
@@ -960,7 +975,7 @@ def check_entry(entry: CdbEntry, cfg: Config, dump: bool = False) -> ResultsByEn
         dump_entry(entry)
         return ResultsByEntry()
 
-    logger.debug(f'Expecting {" ".join(to_check) if to_check else "none"}')
+    logger.debug(f'Expecting {pprint.pformat(to_check) if to_check else "none"}')
 
     consistency = check_consistency(entry.orig_args, cfg.consistency)
     debug = {}
@@ -974,7 +989,7 @@ def check_entry(entry: CdbEntry, cfg: Config, dump: bool = False) -> ResultsByEn
                          debug=debug)
 
     if has_to_report_entries(cfg):
-        report_entry(entry.file, res)
+        report_entry(file=entry.file, res=res, cfg=cfg)
 
     return res
 
@@ -1065,6 +1080,7 @@ def check_cdb(cdb: List[CdbEntry],
         add_to_result(res, e, res_by_entry)
 
     if cfg.summary:
+        logger.debug(LOG_SEPARATOR)
         logger.debug('Creating summary...')
         summary_report(res)
 
@@ -1200,7 +1216,9 @@ def arg_parser() -> argparse.ArgumentParser:
     out_mx_opts = out_opts.add_mutually_exclusive_group()
     out_mx_opts.add_argument('-s', '--summary', action='store_true', help='Summarize results')
     out_mx_opts.add_argument('-d', '--dump', action='store_true', help='Dump entries to check')
-    out_opts.add_argument('-v', '--verbose', action='store_true', help='Verbose logging')
+    out_mx_log_opts = out_opts.add_mutually_exclusive_group()
+    out_mx_log_opts.add_argument('-v', '--verbose', action='store_true', help='Verbose logging')
+    out_mx_log_opts.add_argument('-vv', '--very-verbose', action='store_true', help='Very verbose logging')
 
     parser.epilog = """
 Notes about --libraries option:
@@ -1260,13 +1278,13 @@ def main():
     args = arg_parser().parse_args()
     cfg = configure(args)
 
-    configure_logging(args.verbose)
+    configure_logging(args.verbose or args.very_verbose)
     logger = logging.getLogger()
 
-    if args.verbose:
+    if args.verbose or args.very_verbose:
         logger.debug('cdb-check - running in verbose mode')
         logger.debug('Configuration:')
-        logger.debug(asdict(cfg))
+        logger.debug(pprint.pformat(cfg, width=100, sort_dicts=False))
 
     if process(args.input,
                cfg=cfg,

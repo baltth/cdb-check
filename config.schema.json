@@ -46,6 +46,10 @@
       "type": "boolean",
       "default": false
     },
+    "very_verbose": {
+      "type": "boolean",
+      "default": false
+    },
     "summary": {
       "type": "boolean",
       "default": false
