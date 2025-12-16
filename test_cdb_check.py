@@ -389,6 +389,15 @@ def test_get_duplicates():
     assert get_duplicates(['-Wall', '-Wno-all'] * 2) == 2
 
 
+def test_key_of_flag():
+
+    assert key_of_flag('--sysroot=/p/t/sr') == '--sysroot...'
+    assert key_of_flag('-O1') == '-O...'
+    assert key_of_flag('-fno-omit-frame-pointer') == '-fomit-frame-pointer'
+    assert key_of_flag('-Wall') == '-Wall'
+    assert key_of_flag('-Wno-error=unused-result') == '-Wunused-result'
+
+
 def test_collect_flags_by_keys():
 
     FLAGS = [
@@ -540,6 +549,24 @@ def test_check_consistency_of_collected():
     assert res.contra_keys == CONTRA_KEYS
     assert res.duplicates == ['-Werror', '-I/p/t/i', '--sysroot...']
     assert not res.maybe_ineffective_flags
+
+
+def test_filter_consistency_for_flags():
+
+    BY_KEYS = collect_flags_by_keys(['-O1', '-O2', '-O2', '-g', '-g', '-Werror', '-Wall',
+                                    '-Wno-all', '-fsanitize', '-Wunused', '-Warray'])
+
+    CONS = ConsistencyResult(duplicates=['-g...', '-O...'],
+                             contra_keys=['-Werror', '-Wall', '-fsanitize'],
+                             maybe_ineffective_flags=['-Wunused', '-Warray'])
+
+    res = filter_consistency_for_flags(CONS,
+                                       to_check=['-O2', '-Wno-all', '-Warray', '!-Werror'],
+                                       flags_by_keys=BY_KEYS)
+
+    assert res.duplicates == ['-O...']
+    assert res.contra_keys == ['-Wall']
+    assert res.maybe_ineffective_flags == ['-Warray']
 
 
 def test_check_consistency():
