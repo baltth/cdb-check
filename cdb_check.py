@@ -612,7 +612,25 @@ def check_consistency(flags: List[str], level: ConsistencyLevel) -> ConsistencyR
     return res
 
 
-def check_flag(flag: str, flag_set: List[str]) -> bool:
+def filter_consistency_for_expected(orig: ConsistencyResult, expected: List[str]) -> ConsistencyResult:
+    """
+    Drop consistency check result for not expected flags.
+    """
+    expected_wo_banned = [e for e in expected if not e.startswith(FLAG_BANNED_PREFIX)]
+
+    def to_keep(k: str) -> bool:
+        return any(e for e in expected_wo_banned if check_flag(e, [k]))
+
+    def filt(flags: List[str]) -> List[str]:
+        return [f for f in flags if to_keep(f)]
+
+    return ConsistencyResult(duplicates=filt(orig.duplicates),
+                             contra_keys=filt(orig.contra_keys),
+                             maybe_ineffective_flags=filt(orig.maybe_ineffective_flags),
+                             debug=orig.debug)   # yes, debug is not filtered...
+
+
+def check_flag(expected: str, flag_set: List[str]) -> bool:
     """
     Check if a flag is present or not present in a flag set.
 
@@ -627,21 +645,21 @@ def check_flag(flag: str, flag_set: List[str]) -> bool:
     TODO:
         - support MSVC arguments
     """
-    if flag.startswith(FLAG_BANNED_PREFIX):
-        return not check_flag(flag.removeprefix(FLAG_BANNED_PREFIX), flag_set)
-    if flag.startswith(FLAG_REGEX_PREFIX):
-        normalized_flag = flag.removeprefix(FLAG_REGEX_PREFIX).replace(PATH_REPLACEMENT, PATH_REPLACEMENT_IN_REGEX)
+    if expected.startswith(FLAG_BANNED_PREFIX):
+        return not check_flag(expected.removeprefix(FLAG_BANNED_PREFIX), flag_set)
+    if expected.startswith(FLAG_REGEX_PREFIX):
+        normalized_flag = expected.removeprefix(FLAG_REGEX_PREFIX).replace(PATH_REPLACEMENT, PATH_REPLACEMENT_IN_REGEX)
         return any(re.search(normalized_flag, a) for a in flag_set)
-    if flag.startswith('-'):
-        return flag in flag_set
-    if f'-{flag}' in flag_set:
+    if expected.startswith('-'):
+        return expected in flag_set
+    if f'-{expected}' in flag_set:
         return True
-    if f'--{flag}' in flag_set:
+    if f'--{expected}' in flag_set:
         return True
     return False
 
 
-def check_flags(entry: CdbEntry, flags: List[str]) -> List[str]:
+def check_flags(entry: CdbEntry, expected_flags: List[str]) -> List[str]:
     """
     Check if a set of compile flags is present (or not) in a CdbEntry,
     additionally log errors to stderr.
@@ -654,7 +672,7 @@ def check_flags(entry: CdbEntry, flags: List[str]) -> List[str]:
     """
 
     res: Set[str] = set()
-    for f in flags:
+    for f in expected_flags:
         if not check_flag(f, entry.args):
             res.add(f)
     return list(res)
@@ -742,6 +760,7 @@ class Config:
     presets: Dict[str, List[str]] = field(default_factory=dict)
     layers: List[Layer] = field(default_factory=list)
     consistency: ConsistencyLevel = field(default=ConsistencyLevel.NONE)
+    consistency_on_expected: bool = False
     verbose: bool = False
     very_verbose: bool = False
     summary: bool = False
@@ -978,6 +997,10 @@ def check_entry(entry: CdbEntry, cfg: Config, dump: bool = False) -> ResultsByEn
     logger.debug(f'Expecting {pprint.pformat(to_check) if to_check else "none"}')
 
     consistency = check_consistency(entry.orig_args, cfg.consistency)
+
+    if cfg.consistency_on_expected:
+        consistency = filter_consistency_for_expected(consistency, to_check)
+
     debug = {}
     if consistency.debug:
         debug['consistency'] = consistency.debug
@@ -1173,7 +1196,7 @@ def load_config(file: str) -> Dict:
     """
     Load config file to a dictionary.
     """
-    with open(file) as f:
+    with open(file, encoding='utf-8') as f:
 
         if file.endswith('.yaml') or file.endswith('.yml'):
             return load_yaml_config(f)
@@ -1200,6 +1223,9 @@ def arg_parser() -> argparse.ArgumentParser:
                         choices=[e.value for e in ConsistencyLevel],
                         default=ConsistencyLevel.CONTRADICTING,
                         help=f'Consistency check level [default: {ConsistencyLevel.CONTRADICTING.value}]')
+
+    parser.add_argument('-ce', '--consistency-on-expected', action='store_true',
+                        help='Report consistency check warnings only for the expected flags')
 
     in_opts = parser.add_argument_group('Input configuration')
 

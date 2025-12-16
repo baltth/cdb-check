@@ -42,6 +42,10 @@
       ],
       "default": 0
     },
+    "consistency_on_expected": {
+      "type": "boolean",
+      "default": false
+    },
     "verbose": {
       "type": "boolean",
       "default": false
