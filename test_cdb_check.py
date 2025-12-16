@@ -17,8 +17,8 @@ def test_path_wildcards_to_regex():
     assert path_wildcards_to_regex('abc/**') == 'abc(/.+)?'
     assert path_wildcards_to_regex('abc/**/c') == 'abc(/.+)?/c'
     assert path_wildcards_to_regex('abc/**/b/**') == 'abc(/.+)?/b(/.+)?'
-    assert path_wildcards_to_regex('**/a') == '(.+)?/a'
-    assert path_wildcards_to_regex('**') == '(.+)?'
+    assert path_wildcards_to_regex('**/a') == '(.*/)?a'
+    assert path_wildcards_to_regex('**') == '.+'
 
     assert path_wildcards_to_regex('ab?/a') == 'ab[^/]/a'
 
@@ -100,6 +100,15 @@ def test_match_path_recursive_wildcard():
     assert match_path(r, 'abc/b/a')
     assert match_path(r, 'abc/x/b')
     assert match_path(r, 'abc/x/b/c/d')
+
+    r = '**/b/**/*.cpp'
+
+    assert not match_path(r, 'abc/b')
+    assert match_path(r, 'abc/b/e.cpp')
+    assert match_path(r, 'abc/b/c/d/e.cpp')
+    assert match_path(r, 'b/c/d/e.cpp')
+    assert match_path(r, 'b/e.cpp')
+    assert match_path(r, '/b/e.cpp')
 
 
 def test_match_path_any_char():
@@ -280,21 +289,58 @@ def test_normalize_trim_path():
     assert e.args[-1] == '--sysroot=[...]/toolchain/include'
 
 
-def test_is_disabler():
-
-    assert not is_disabler('-I/p/t/x')
-    assert not is_disabler('-g')
-    assert not is_disabler('-Werror')
-    assert is_disabler('-Wno-error')
-
-
 def test_make_enabler():
 
+    assert make_enabler('-I/p') == '-I/p'
     assert make_enabler('-Werror') == '-Werror'
+    assert make_enabler('-Gno') == '-Gno'
     assert make_enabler('-Wno-error') == '-Werror'
+    assert make_enabler('-fno-err') == '-ferr'
 
 
-def test_collect_flags_by_keys_basic():
+def test_werror_enabled():
+
+    assert not werror_enabled([])
+    assert not werror_enabled(['a', 'b'])
+
+    assert werror_enabled(['a', '-Werror', 'b'])
+    assert not werror_enabled(['a', '-Werror', 'b', '-Wno-error'])
+    assert werror_enabled(['-Werror', '-Wno-error', '-Werror'])
+
+
+def test_match_switch_flag():
+
+    # trivial
+    assert match_switch_flag('-Wall') == '-Wall'
+    assert match_switch_flag('-Wunused') == '-Wunused'
+    assert match_switch_flag('-Werror') == '-Werror'
+
+    # disablers
+    assert match_switch_flag('-fno-omit-frame-pointer') == '-fomit-frame-pointer'
+    assert match_switch_flag('-Wno-unused') == '-Wunused'
+
+    # selective Werror
+    assert match_switch_flag('-Werror=unused') == '-Wunused'
+    assert match_switch_flag('-Wno-error=unused') == '-Wunused'
+
+    # preprocessor
+    assert match_switch_flag('-DDEF') == '-DDEF'
+    assert match_switch_flag('-D_DEF=34') == '-D_DEF'
+    assert match_switch_flag('-U_DEF') == '-D_DEF'
+
+    assert match_switch_flag('-DA') == '-DA'
+    assert match_switch_flag('-D\\u0013') == '-D\\u0013'
+
+    assert match_switch_flag('-U2_DEF') != '-D2_DEF'
+
+    # specials
+    assert match_switch_flag('-O2') == '-O...'
+    assert match_switch_flag('-Os') == '-O...'
+    assert match_switch_flag('-g') == '-g...'
+    assert match_switch_flag('-g2') == '-g...'
+
+
+def test_collect_flags_by_keys_trivial():
 
     c = collect_flags_by_keys(['-a', '-b', '-c'])
     assert {'-a', '-b', '-c'} == set(c.keys())
@@ -302,13 +348,23 @@ def test_collect_flags_by_keys_basic():
         assert v == [k]
 
 
-def test_collect_flags_by_keys_special():
+def test_collect_flags_by_keys_multi():
 
-    c = collect_flags_by_keys(['-O1', '-O2', '-Ww=12', '--Ww=13', '-g3'])
-    assert {'-O...', '-Ww=...', '--Ww=...', '-g...'} == set(c.keys())
+    FLAGS = ['-Ia/b', '-I=b/c', '-I c/d', '-isystem a/b', '-isystem b/c']
+
+    c = collect_flags_by_keys(FLAGS)
+    assert set(c.keys()) == set(FLAGS)
+    for k, v in c.items():
+        assert v == [k]
+
+
+def test_collect_flags_by_keys_with_value():
+
+    c = collect_flags_by_keys(['-O1', '-O2', '-Ww=12', '-g', '--Ww=13', '-g3'])
+    assert {'-O...', '-Ww...', '--Ww...', '-g...'} == set(c.keys())
     assert c['-O...'] == ['-O1', '-O2']
-    assert c['-Ww=...'] == ['-Ww=12']
-    assert c['-g...'] == ['-g3']
+    assert c['-Ww...'] == ['-Ww=12']
+    assert c['-g...'] == ['-g', '-g3']
 
 
 def test_collect_flags_by_keys_disablers():
@@ -316,6 +372,13 @@ def test_collect_flags_by_keys_disablers():
     c = collect_flags_by_keys(['-fa', '-fno-a', '-fa'])
     assert {'-fa'} == set(c.keys())
     assert c['-fa'] == ['-fa', '-fno-a', '-fa']
+
+
+def test_collect_flags_by_keys_werror():
+
+    c = collect_flags_by_keys(['-Wunused', '-Wno-unused', '-Werror=unused', '-Wno-error=unused'])
+    assert {'-Wunused'} == set(c.keys())
+    assert len(c['-Wunused']) == 4
 
 
 def test_get_duplicates():
@@ -326,16 +389,7 @@ def test_get_duplicates():
     assert get_duplicates(['-Wall', '-Wno-all'] * 2) == 2
 
 
-def test_has_contradiction():
-
-    assert not has_contradiction(['-Wall'])
-    assert not has_contradiction(['-Wall', '-Wall'])
-    assert has_contradiction(['-Wall', '-Wno-all'])
-    assert has_contradiction(['-Wno-all', '-Wall'])
-    assert has_contradiction(['-Wno-all', '-Wall', '-Wno-all'])
-
-
-def test_check_consistency_of_collected():
+def test_collect_flags_by_keys():
 
     FLAGS = [
         '-Werror',
@@ -353,21 +407,184 @@ def test_check_consistency_of_collected():
         '-g1',
         '--sysroot=/p/t/sr',
         '--sysroot=/p/t/sr',
+        '-DA',
+        '-UA',
+        '-DA=4',
     ]
 
-    COLLECTED = collect_flags_by_keys(FLAGS)
+    EXPECTED = {
+        '-Werror': ['-Werror', '-Werror'],
+        '-fomit-frame-pointer': ['-fomit-frame-pointer', '-fno-omit-frame-pointer', '-fomit-frame-pointer'],
+        '-Wunused-result': ['-Wno-error=unused-result'],
+        '-I/p/t/i': ['-I/p/t/i', '-I/p/t/i'],
+        '-I/p/t/i2': ['-I/p/t/i2'],
+        '-O...': ['-O1', '-Os'],
+        '-g...': ['-g', '-g1'],
+        '--sysroot...': ['--sysroot=/p/t/sr', '--sysroot=/p/t/sr'],
+        '-DA': ['-DA', '-UA', '-DA=4']
+    }
 
-    contra, dup = check_consistency_of_collected(COLLECTED, ConsistencyLevel.ALL)
-    assert contra == ['-fomit-frame-pointer']   # TODO add support for -O1 vs -Os
-    assert dup == ['-Werror', '-I/p/t/i', '--sysroot=...']
+    assert collect_flags_by_keys(FLAGS) == EXPECTED
 
-    contra, dup = check_consistency_of_collected(COLLECTED, ConsistencyLevel.CONTRADICTING)
-    assert contra == ['-fomit-frame-pointer']
-    assert not dup
 
-    contra, dup = check_consistency_of_collected(COLLECTED, ConsistencyLevel.NONE)
-    assert not contra
-    assert not dup
+def test_collect_extended_warning_sets():
+
+    FLAGS = [
+        '-fomit-frame-pointer',
+        '-Werror',
+        '-Wno-error=unused',
+        '-Os',
+        '-Wall',
+        '-Wno-array',
+        '-Os',
+        '-Wall',
+        '-Wunused',
+        '-Wno-unused',
+        '-Wno-extra',
+    ]
+
+    res = collect_extended_warning_sets(FLAGS)
+
+    assert res['-Warray'] == ['-Werror', '-Wall', '-Wno-array', '-Wall', '-Wno-extra']
+    assert res['-Wunused'] == ['-Werror', '-Wno-error=unused', '-Wall', '-Wunused', '-Wno-unused', '-Wno-extra']
+
+    assert '-Werror=unused' not in res
+    assert '-Werror' not in res
+    assert '-Wall' not in res
+    assert '-Wextra' not in res
+    assert '-Wno-extra' not in res
+    assert '-Os' not in res
+
+
+def test_get_maybe_ineffective_flags_of_set():
+
+    assert get_maybe_ineffective_flags_of_set(['-Wunused', '-Wno-all'])[0] == ['-Wunused']
+    assert get_maybe_ineffective_flags_of_set(['-Wall', '-Wunused', '-Wno-all', '-Wall'])[0] == ['-Wunused']
+
+    assert get_maybe_ineffective_flags_of_set(['-Wall', '-Wno-unused', '-Werror', '-Wall'])[0] == ['-Wno-unused']
+
+    assert get_maybe_ineffective_flags_of_set(['-Wall', '-Werror=unused', '-Wno-unused'])[0] == ['-Werror=unused']
+    assert get_maybe_ineffective_flags_of_set(['-Wall', '-Werror=unused', '-Wno-all'])[0] == ['-Werror=unused']
+    assert get_maybe_ineffective_flags_of_set(['-Wall', '-Werror=unused', '-Wno-error'])[0] == ['-Werror=unused']
+    assert not get_maybe_ineffective_flags_of_set(['-Wall', '-Werror=unused', '-Werror'])[0]
+
+    assert get_maybe_ineffective_flags_of_set(
+        ['-Wall', '-Werror', '-Wno-error=unused', '-Wno-unused'])[0] == ['-Wno-error=unused']
+    assert get_maybe_ineffective_flags_of_set(
+        ['-Wall', '-Werror', '-Wno-error=unused', '-Wno-all'])[0] == ['-Wno-error=unused']
+    assert get_maybe_ineffective_flags_of_set(
+        ['-Wall', '-Werror', '-Wno-error=unused', '-Werror'])[0] == ['-Wno-error=unused']
+    assert not get_maybe_ineffective_flags_of_set(['-Wall', '-Werror', '-Wno-error=unused', '-Wno-error'])[0]
+
+
+def test_get_maybe_ineffective_flags():
+
+    FLAGS = [
+        '-fomit-frame-pointer',
+        '-Werror',
+        '-Wno-error=unused',    # ineffective due to -Wunused
+        '-Os',
+        '-Wall',
+        '-Wno-array',           # ineffective due to -Wall
+        '-Os',
+        '-Wall',
+        '-Wunused',             # ineffective due to -Wno-extra
+        '-Wno-unused',
+        '-Wno-extra',
+    ]
+
+    res, _ = get_maybe_ineffective_flags(FLAGS)
+
+    assert '-Wno-error=unused' in res
+    assert '-Wno-array' in res
+    assert '-Wunused' in res
+    assert len(res) == 3
+
+
+def test_has_contradiction():
+
+    assert not has_contradiction(['-Wa'])
+    assert not has_contradiction(['-Wa', '-Wa'])
+
+    assert has_contradiction(['-Wa', '-Wno-a'])
+    assert has_contradiction(['-Wa', '-Wno-a', '-Wa'])
+    assert has_contradiction(['-O1', '-Os'])
+
+
+def test_check_consistency_of_collected():
+
+    COLLECTED = {
+        '-Werror': ['-Werror', '-Werror'],
+        '-fomit-frame-pointer': ['-fomit-frame-pointer', '-fno-omit-frame-pointer', '-fomit-frame-pointer'],
+        '-Wunused-result': ['-Wno-error=unused-result'],
+        '-I/p/t/i': ['-I/p/t/i', '-I/p/t/i'],
+        '-I/p/t/i2': ['-I/p/t/i2'],
+        '-O...': ['-O1', '-Os'],
+        '-g...': ['-g', '-g1'],
+        '--sysroot...': ['--sysroot=/p/t/sr', '--sysroot=/p/t/sr']
+    }
+
+    CONTRA_KEYS = ['-fomit-frame-pointer', '-O...', '-g...']
+
+    res = check_consistency_of_collected(COLLECTED, ConsistencyLevel.NONE)
+    assert not res.contra_keys
+    assert not res.duplicates
+    assert not res.maybe_ineffective_flags
+
+    res = check_consistency_of_collected(COLLECTED, ConsistencyLevel.CONTRADICTING)
+    assert res.contra_keys == CONTRA_KEYS
+    assert not res.duplicates
+    assert not res.maybe_ineffective_flags
+
+    res = check_consistency_of_collected(COLLECTED, ConsistencyLevel.ALL)
+    assert res.contra_keys == CONTRA_KEYS
+    assert res.duplicates == ['-Werror', '-I/p/t/i', '--sysroot...']
+    assert not res.maybe_ineffective_flags
+
+
+def test_check_consistency():
+
+    F1 = [
+        '-fomit-frame-pointer',
+        '-fno-omit-frame-pointer',
+        '-DDEF=2',
+        '-DDEF=3'
+    ]
+
+    res = check_consistency(F1, ConsistencyLevel.ALL)
+    assert res.contra_keys == ['-fomit-frame-pointer', '-DDEF']
+
+    F2 = [
+        '-Werror',
+        '-Wno-error',
+        '-Wno-error=unused-result',
+        '-Wunused-result',
+    ]
+
+    res = check_consistency(F2, ConsistencyLevel.ALL)
+    assert res.contra_keys == ['-Werror', '-Wunused-result']
+
+    F3 = [
+        '--sysroot=a/b',
+        '--sysroot=b/c',
+        '-g1',
+        '-g',
+    ]
+
+    res = check_consistency(F3, ConsistencyLevel.ALL)
+    assert res.contra_keys == ['--sysroot...', '-g...']
+
+    F4 = [
+        '-Werror=unused-result',
+        '-Wno-all',
+        '-g1',
+        '-g1',
+    ]
+
+    res = check_consistency(F4, ConsistencyLevel.ALL)
+    assert not res.contra_keys
+    assert res.duplicates == ['-g...']
+    assert res.maybe_ineffective_flags == ['-Werror=unused-result']
 
 
 def test_check_flag_no_prefix():

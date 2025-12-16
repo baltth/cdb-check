@@ -7,9 +7,10 @@ Usage: see `cdb_check.py -h` for details.
 """
 
 from dataclasses import dataclass, field, fields, asdict
-from enum import Enum
+from enum import IntEnum
 from pathlib import PurePath, Path
-from typing import List, Dict, Set, Union, Tuple, Callable
+import pprint
+from typing import List, Dict, Set, Union, Tuple, Callable, Any
 from shlex import split
 import argparse
 import copy
@@ -23,7 +24,7 @@ __author__ = "Balazs Toth"
 __email__ = "baltth@gmail.com"
 __copyright__ = "Copyright 2025, Balazs Toth"
 __license__ = "MIT"
-__version__ = "0.3.0"
+__version__ = "0.5.1"
 
 
 def path_wildcards_to_regex(path: str) -> str:
@@ -42,7 +43,8 @@ def path_wildcards_to_regex(path: str) -> str:
 
     REC_WILDCARD = '**'
     REC_WILDCARD_PATTERN = '(/.+)?'
-    REC_WILDCARD_PATTERN_NO_SLASH = '(.+)?'
+    REC_WILDCARD_PATTERN_LEADING = '(.*/)?'
+    REC_WILDCARD_PATTERN_STANDALONE = '.+'
 
     WILDCARD = '*'
     WILDCARD_PATTERN = f'{NON_SEP}*'
@@ -99,8 +101,10 @@ def path_wildcards_to_regex(path: str) -> str:
     # - remove extra `/` before recursive wildcards, added by join()
     r = r.replace('/' + REC_WILDCARD_PATTERN, REC_WILDCARD_PATTERN)
     # - remove `/` of leading recursive wildcard
-    if r.startswith(REC_WILDCARD_PATTERN):
-        r = r.replace(REC_WILDCARD_PATTERN, REC_WILDCARD_PATTERN_NO_SLASH, 1)
+    if r.startswith(REC_WILDCARD_PATTERN + '/'):
+        r = r.replace(REC_WILDCARD_PATTERN + '/', REC_WILDCARD_PATTERN_LEADING, 1)
+    elif r == REC_WILDCARD_PATTERN:
+        r = REC_WILDCARD_PATTERN_STANDALONE
     return r
 
 
@@ -155,11 +159,14 @@ FLAG_BANNED_PREFIX = '!'
 
 PRESET_REF_PREFIX = '$'
 
+LOG_SEPARATOR = "\n--------"
 
-class ConsistencyLevel(Enum):
+
+class ConsistencyLevel(IntEnum):
     NONE = 0
     CONTRADICTING = 1
-    ALL = 2
+    INEFFECTIVE = 2
+    ALL = 3
 
 
 def dedup(l: List) -> List:
@@ -247,6 +254,11 @@ def normalize_base_dirs(base_dirs: List[str]) -> List[str]:
 
 
 def join_opt_pairs(args: List[str]) -> List[str]:
+    """
+    Join corresponding argument pairs.
+    - `['-a', '-b', 'b_value', '-c']` -> `['-a', '-b b_value', '-c']`
+    """
+
     if len(args) < 2:
         return args
     if args[1].startswith('-'):
@@ -290,35 +302,227 @@ def normalize(entry: CdbEntry,
                     out_file=remove_prefix(entry.out_file))
 
 
-def is_disabler(flag: str) -> bool:
-    return len(flag) > 5 and flag[:5].endswith('no-')
-
-
 def make_enabler(flag: str) -> str:
-    return flag[:2] + flag[5:] if is_disabler(flag) else flag
+    """
+    Get 'enabler' version of a 'disabler' flag or return the original.
+    - `-Wno-unused` -> `-Wunused`
+    - `-Werror` -> `-Werror`
+    """
+    m = re.match(r'^(-[a-zA-Z])no-(.+)', flag)
+    if m:
+        return f'{m.group(1)}{m.group(2)}'
+    return flag
+
+
+MULTI_FLAGS = [
+    '-I',
+    '-idirafter',
+    '-imacros ',
+    '-imultilib ',
+    '-iplugin=',
+    '-iprefix ',
+    '-iquote ',
+    '-isysroot ',
+    '-isystem ',
+    '-iwithprefix ',
+    '-iwithprefixbefore ',
+    '--embed-dir=',
+    '-L',
+    '-l'
+]
+
+GENERAL_W_FLAGS = [
+    '-Wall',
+    '-Wextra',
+    '-Werror',
+]
+
+
+def match_multi_flag(flag: str) -> str:
+    """
+    Check if a flag is a 'multi flag', i.e.
+    may be applied multiple times.
+
+    Returns:
+        str: the flag itself if multi-flag else empty
+    """
+    for f in MULTI_FLAGS:
+        if flag.startswith(f):
+            return flag
+    return ''
+
+
+def is_multi_flag(flag: str) -> bool:
+    return bool(match_multi_flag(flag))
+
+
+WERROR_FLAGS = ['-Werror', '-Wno-error']
+WERROR_OPT_FLAGS = [f'{f}=' for f in WERROR_FLAGS]
+
+
+def werror_enabled(flags: List[str]) -> bool:
+    """
+    Check if '-Werror' is enables effectively,
+    i.e. not turned off by a -Wno-error switch later.
+    """
+    opts = [f for f in flags if f in WERROR_FLAGS]
+    if opts:
+        return opts[-1] == '-Werror'
+    return False
+
+
+def match_switch_flag(flag: str) -> str:
+    """
+    Associate the logical 'switch group' of a flag.
+    - `-DDEF_=1` -> `-DDEF`
+    - `-UDEF` -> `-DDEF`
+    - `-Wno-error=unused` -> `-Wunused`
+    - `-Wno-error` -> `-Werror`
+    - `--sysroot=a/b/c` -> `--sysroot...`
+    - `-O2` -> `-O...`
+    """
+    assert not is_multi_flag(flag)
+
+    # e.g.
+    # -D_DEF_=1 -> -D_DEF_
+    # -U_DEF_ -> -D_DEF_
+    m = re.search(r'^-[DU]([a-zA-Z_\\][a-zA-Z_\\0-9]*)=?', flag)
+    if m:
+        return '-D' + m.group(1)
+
+    # e.g.
+    # -Wno-error=unused-result -> -Wunused-result
+    if any(flag.startswith(f) for f in WERROR_OPT_FLAGS):
+        return '-W' + flag.split('=')[1]
+
+    # e.g.
+    # --sysroot=/a/b -> --sysroot...
+    # but -fomit-frame-pointer, -O2 etc. remains
+    m = re.search(r'^(--?[a-zA-Z][a-zA-Z0-9_-]*)=', flag)
+    f = f'{m.group(1)}...' if m else flag
+
+    # Handle special switches without assignment
+    if f.startswith('-O'):
+        return '-O...'
+    if re.search(r'^-g[\d]?$', f):
+        return '-g...'
+
+    # -fno-omit-frame-pointer -> -fomit-frame-pointer
+    return make_enabler(f)
 
 
 def collect_flags_by_keys(flags: List[str]) -> Dict[str, List[str]]:
     """
     Collect flags by the logical option they represent.
     """
-    def key_of(f: str):
-        m = re.search(r'^(--?[a-zA-Z][a-zA-Z0-9_-]*=)', f)
-        key = f'{m.group(1)}...' if m else f
-        if key.startswith('-O'):
-            return '-O...'
-        if re.search(r'^-g[\d]?$', key):
-            return '-g...'
-        return make_enabler(key)
 
     res: Dict[str, List[str]] = {}
     for f in flags:
-        key = key_of(f)
+        key = match_multi_flag(f)
+        if not key:
+            key = match_switch_flag(f)
         if key in res.keys():
             res[key].append(f)
         else:
             res[key] = [f]
     return res
+
+
+def collect_extended_warning_sets(flags: List[str]) -> Dict[str, List[str]]:
+    """
+    Collect `-W` flags
+    - -W(no-)x and -W(no-)error=x together,
+    - along with the general (grouping) switches,
+    - with consecutive duplicates removed
+    """
+
+    flags = [f for f in flags if f.startswith('-W')]
+
+    general_flags: List[str] = []
+    res: Dict[str, List[str]] = {}
+
+    def add_to_all_registered(f: str):
+        for v in res.values():
+            v.append(f)
+
+    for f in flags:
+        key = make_enabler(f)
+        f_is_general = bool(key in GENERAL_W_FLAGS)
+        if key.startswith('-Werror='):
+            key = key.replace('-Werror=', '-W')
+
+        if f_is_general:
+            general_flags.append(f)
+            add_to_all_registered(f)
+        elif key in res.keys():
+            res[key].append(f)
+        else:
+            res[key] = general_flags + [f]
+
+    def reduce(ls: List[str]) -> List[str]:
+        return [ls[0]] + [e for i, e in enumerate(ls[1:]) if e != ls[i]]
+
+    return {k: reduce(v) for k, v in res.items()}
+
+
+def get_maybe_ineffective_flags_of_set(flags: List[str]) -> Tuple[List[str], Dict]:
+    """
+    Analyze flag sequence to identify potentially ineffective specific flags
+    """
+
+    flags_as_enabler = [make_enabler(f) for f in flags]
+    is_enabler = [flags[i] == f for i, f in enumerate(flags_as_enabler)]
+    is_specific = [f not in GENERAL_W_FLAGS for f in flags_as_enabler]
+    is_error = [f.startswith('-Werror') for f in flags_as_enabler]
+
+    cat = list(zip(is_enabler, is_specific, is_error, strict=True))
+
+    CAT_WA = (True, False, False)       # -Wall
+    CAT_WNA = (False, False, False)     # -Wno-all
+    CAT_WX = (True, True, False)        # -Wunused
+    CAT_WNX = (False, True, False)      # -Wno-unused
+    CAT_WE = (True, False, True)        # -Werror
+    CAT_WNE = (False, False, True)      # -Wno-error
+    CAT_WEX = (True, True, True)        # -Werror=unused
+    CAT_WNEX = (False, True, True)      # -Wno-error=unused
+
+    res: List[str] = []
+    for i, f in enumerate(flags):
+        rem = cat[i+1:]
+
+        def in_remaining(remaining, *args) -> bool:
+            return any(flag in args for flag in remaining)
+
+        if ((cat[i] == CAT_WX and CAT_WNA in rem)       # -Wunused -Wno-all
+            or (cat[i] == CAT_WNX and CAT_WA in rem)    # -Wno-unused -Wall
+            # -Werror=unused -Wno-unused|-Wno-all|-Wno-error
+            or (cat[i] == CAT_WEX and in_remaining(rem, CAT_WNX, CAT_WNA, CAT_WNE))
+                # -Wno-error=unused -Wno-unused|-Wno-all|-Werror
+                or (cat[i] == CAT_WNEX and in_remaining(rem, CAT_WNX, CAT_WNA, CAT_WE))):
+            res.append(f)
+
+    def to_str(c: Tuple[bool, bool, bool]) -> Tuple[str, str, str]:
+        return ('en' if c[0] else 'dis',
+                'spec' if c[1] else 'gen',
+                'err' if c[2] else 'warn')
+    dbg = {"flag_categories": list(zip(flags, (to_str(c) for c in cat)))} if res else {}
+    return res, dbg
+
+
+def get_maybe_ineffective_flags(flags: List[str]) -> Tuple[List[str], Dict]:
+
+    debug = {}
+    res: List[str] = []
+    w_sets = collect_extended_warning_sets(flags)
+    for k, v in w_sets.items():
+        r, dbg = get_maybe_ineffective_flags_of_set(v)
+        res += r
+        if r:
+            debug.setdefault(k, {})
+            debug[k]['collected'] = v
+            debug[k].update(dbg)
+
+    return dedup(res), debug
 
 
 def missing_flag_text(flag: str) -> str:
@@ -327,6 +531,10 @@ def missing_flag_text(flag: str) -> str:
 
 def contradicting_flag_text(flag: str) -> str:
     return f'Contradicting options of \'{flag}\''
+
+
+def ineffective_flag_text(flag: str) -> str:
+    return f'Flag may have no effect: \'{flag}\''
 
 
 def duplicate_flag_text(flag: str) -> str:
@@ -338,38 +546,70 @@ def get_duplicates(flags: List[str]) -> int:
 
 
 def has_contradiction(flags: List[str]) -> bool:
-    if len(flags) < 2:
-        return False
-    enablers: List[str] = []
-    disablers: List[str] = []
-    for f in flags:
-        if is_disabler(f):
-            disablers.append(make_enabler(f))
-        else:
-            enablers.append(f)
-    return not set(enablers).isdisjoint(set(disablers))
+    return len(set(flags)) != 1
 
 
-def check_consistency_of_collected(flags_by_keys: Dict[str, List[str]], level: ConsistencyLevel) -> Tuple[List[str], List[str]]:
+@dataclass
+class ConsistencyResult:
+    duplicates: List[str] = field(default_factory=list)
+    contra_keys: List[str] = field(default_factory=list)
+    maybe_ineffective_flags: List[str] = field(default_factory=list)
+    debug: Dict[str, Any] = field(default_factory=dict)
+
+
+def check_consistency_of_collected(flags_by_keys: Dict[str, List[str]], level: ConsistencyLevel) -> ConsistencyResult:
+    """
+    Consistency check of flags collected to logical groups.
+    """
 
     if level == ConsistencyLevel.NONE:
-        return [], []
+        return ConsistencyResult()
 
-    contra: List[str] = []
+    contra_keys: List[str] = []
     duplicates: List[str] = []
+
+    debug: Dict[str, Dict[str], Any] = {}
+
+    def add_debug(k: str, v: List[str]):
+        debug.setdefault(k, {})
+        debug[k].setdefault('collected', [])
+        debug[k]['collected'] = v
+
     for k, v in flags_by_keys.items():
         dup = get_duplicates(v) if level == ConsistencyLevel.ALL else 0
-        if has_contradiction(v):
-            contra.append(k)
+        if not is_multi_flag(k) and has_contradiction(v):
+            contra_keys.append(k)
+            add_debug(k, v)
         elif dup > 0:
             duplicates.append(k)
-    return contra, duplicates
+            add_debug(k, v)
+
+    return ConsistencyResult(duplicates=duplicates,
+                             contra_keys=contra_keys,
+                             debug=debug)
 
 
-def check_consistency(entry: CdbEntry, level: ConsistencyLevel) -> Tuple[List[str], List[str]]:
+def check_consistency(flags: List[str], level: ConsistencyLevel) -> ConsistencyResult:
+    """
+    Consistency check of a flag list.
 
-    flags_by_keys = collect_flags_by_keys(entry.orig_args)
-    return check_consistency_of_collected(flags_by_keys, level)
+    Args:
+        flags: List of flags
+        level: Switch to define the check features.
+
+    Return:
+        ConsistencyResult:
+            Bundle of
+            - the list of flags having duplicates
+            - the list of flag groups containing contradiction
+            - the list of potentially ineffective flags
+    """
+    flags_by_keys = collect_flags_by_keys(flags)
+    res = check_consistency_of_collected(flags_by_keys, level)
+    if level >= ConsistencyLevel.INEFFECTIVE:
+        res.maybe_ineffective_flags, dbg = get_maybe_ineffective_flags(flags)
+        res.debug.update(dbg)
+    return res
 
 
 def check_flag(flag: str, flag_set: List[str]) -> bool:
@@ -503,6 +743,7 @@ class Config:
     layers: List[Layer] = field(default_factory=list)
     consistency: ConsistencyLevel = field(default=ConsistencyLevel.NONE)
     verbose: bool = False
+    very_verbose: bool = False
     summary: bool = False
     extra: Dict[str, Union[bool, str, List[str]]] = field(default_factory=dict)
 
@@ -682,24 +923,38 @@ class ResultsByEntry:
     missing: List[str] = field(default_factory=list)
     contra: List[str] = field(default_factory=list)
     duplicates: List[str] = field(default_factory=list)
+    maybe_ineffective_flags: List[str] = field(default_factory=list)
+    debug: Dict[str, Dict[str, Any]] = field(default_factory=dict)
 
 
 def has_to_report_entries(cfg: Config) -> bool:
-    return cfg.verbose or not cfg.summary
+    return cfg.verbose or cfg.very_verbose or not cfg.summary
 
 
-def report_entry(file: str, res: ResultsByEntry):
+def report_entry(file: str, res: ResultsByEntry, cfg: Config):
     logger = logging.getLogger()
-    for f in res.contra:
-        logger.warning(f'{file}: {contradicting_flag_text(f)}')
-    for f in res.duplicates:
-        logger.warning(f'{file}: {duplicate_flag_text(f)}')
 
-    if not res.missing:
-        logger.debug('All expected flags OK')
+    missing_lines = [f'{file}: {missing_flag_text(f)}' for f in res.missing]
+    cons_lines = [f'{file}: {contradicting_flag_text(f)}' for f in res.contra]
+    cons_lines += [f'{file}: {ineffective_flag_text(f)}' for f in res.maybe_ineffective_flags]
+    cons_lines += [f'{file}: {duplicate_flag_text(f)}' for f in res.duplicates]
+
+    if cons_lines:
+        logger.debug('')
+        logger.warning('\n'.join(cons_lines))
+
+    if missing_lines:
+        logger.debug('')
+        logger.warning('\n'.join(missing_lines))
+    elif not cons_lines:
+        logger.debug('\nAll expected flags OK')
     else:
-        for f in res.missing:
-            logger.warning(f'{file}: {missing_flag_text(f)}')
+        logger.debug('\nAll expected flags present but may be ineffective')
+
+    if cfg.very_verbose and res.debug.get('consistency', {}):
+        logger.debug('\nDebug data of consistency check result:')
+        dbg = pprint.pformat(res.debug['consistency'], width=100, sort_dicts=False)
+        logger.debug(dbg)
 
 
 def check_entry(entry: CdbEntry, cfg: Config, dump: bool = False) -> ResultsByEntry:
@@ -711,6 +966,7 @@ def check_entry(entry: CdbEntry, cfg: Config, dump: bool = False) -> ResultsByEn
     """
 
     logger = logging.getLogger()
+    logger.debug(LOG_SEPARATOR)
     logger.debug(f'Entry {entry.file} ...')
 
     to_check = get_relevant_flags(cfg, entry)
@@ -719,14 +975,21 @@ def check_entry(entry: CdbEntry, cfg: Config, dump: bool = False) -> ResultsByEn
         dump_entry(entry)
         return ResultsByEntry()
 
-    logger.debug(f'Expecting {" ".join(to_check) if to_check else "none"}')
+    logger.debug(f'Expecting {pprint.pformat(to_check) if to_check else "none"}')
 
-    res = ResultsByEntry()
-    res.contra, res.duplicates = check_consistency(entry, cfg.consistency)
-    res.missing = check_flags(entry, to_check)
+    consistency = check_consistency(entry.orig_args, cfg.consistency)
+    debug = {}
+    if consistency.debug:
+        debug['consistency'] = consistency.debug
+
+    res = ResultsByEntry(duplicates=consistency.duplicates,
+                         contra=consistency.contra_keys,
+                         maybe_ineffective_flags=consistency.maybe_ineffective_flags,
+                         missing=check_flags(entry, to_check),
+                         debug=debug)
 
     if has_to_report_entries(cfg):
-        report_entry(entry.file, res)
+        report_entry(file=entry.file, res=res, cfg=cfg)
 
     return res
 
@@ -747,6 +1010,8 @@ def add_to_result(res: CheckResult, entry: CdbEntry, by_entry: ResultsByEntry):
         add_one(missing_flag_text(f))
     for f in by_entry.contra:
         add_one(contradicting_flag_text(f))
+    for f in by_entry.maybe_ineffective_flags:
+        add_one(ineffective_flag_text(f))
     for f in by_entry.duplicates:
         add_one(duplicate_flag_text(f))
 
@@ -815,6 +1080,7 @@ def check_cdb(cdb: List[CdbEntry],
         add_to_result(res, e, res_by_entry)
 
     if cfg.summary:
+        logger.debug(LOG_SEPARATOR)
         logger.debug('Creating summary...')
         summary_report(res)
 
@@ -923,22 +1189,17 @@ def arg_parser() -> argparse.ArgumentParser:
     Create CLI argument parser.
     """
 
-    def consistency_level(arg) -> ConsistencyLevel:
-        v = int(arg)
-        if v not in [m.value for m in ConsistencyLevel]:
-            raise argparse.ArgumentTypeError(f"Invalid health check level {v}")
-        return ConsistencyLevel(v)
-
     parser = argparse.ArgumentParser()
     parser.description = "Tool to verify C/C++ build configuration. See README.md for details."
     parser.add_argument('input', help='Compile DB file (compile_commands.json)')
     parser.add_argument('-c', '--config', help='Config file (JSON/YAML)')
 
     parser.add_argument('-f', '--flags', nargs='+', help='Flags to check, passed without \'-\' prefix')
-    parser.add_argument('--consistency',
-                        type=consistency_level,
+    parser.add_argument('-cc', '--consistency',
+                        type=lambda x: ConsistencyLevel(int(x)),
+                        choices=[e.value for e in ConsistencyLevel],
                         default=ConsistencyLevel.CONTRADICTING,
-                        help='Consistency check level [0-2, default: 1]')
+                        help=f'Consistency check level [default: {ConsistencyLevel.CONTRADICTING.value}]')
 
     in_opts = parser.add_argument_group('Input configuration')
 
@@ -955,7 +1216,9 @@ def arg_parser() -> argparse.ArgumentParser:
     out_mx_opts = out_opts.add_mutually_exclusive_group()
     out_mx_opts.add_argument('-s', '--summary', action='store_true', help='Summarize results')
     out_mx_opts.add_argument('-d', '--dump', action='store_true', help='Dump entries to check')
-    out_opts.add_argument('-v', '--verbose', action='store_true', help='Verbose logging')
+    out_mx_log_opts = out_opts.add_mutually_exclusive_group()
+    out_mx_log_opts.add_argument('-v', '--verbose', action='store_true', help='Verbose logging')
+    out_mx_log_opts.add_argument('-vv', '--very-verbose', action='store_true', help='Very verbose logging')
 
     parser.epilog = """
 Notes about --libraries option:
@@ -1015,13 +1278,13 @@ def main():
     args = arg_parser().parse_args()
     cfg = configure(args)
 
-    configure_logging(args.verbose)
+    configure_logging(args.verbose or args.very_verbose)
     logger = logging.getLogger()
 
-    if args.verbose:
+    if args.verbose or args.very_verbose:
         logger.debug('cdb-check - running in verbose mode')
         logger.debug('Configuration:')
-        logger.debug(asdict(cfg))
+        logger.debug(pprint.pformat(cfg, width=100, sort_dicts=False))
 
     if process(args.input,
                cfg=cfg,

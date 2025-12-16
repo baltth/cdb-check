@@ -37,11 +37,16 @@
       "enum": [
         0,
         1,
-        2
+        2,
+        3
       ],
       "default": 0
     },
     "verbose": {
+      "type": "boolean",
+      "default": false
+    },
+    "very_verbose": {
       "type": "boolean",
       "default": false
     },
