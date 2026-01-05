@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+from copy import deepcopy
 from cdb_check import *
 
 
@@ -389,6 +390,15 @@ def test_get_duplicates():
     assert get_duplicates(['-Wall', '-Wno-all'] * 2) == 2
 
 
+def test_key_of_flag():
+
+    assert key_of_flag('--sysroot=/p/t/sr') == '--sysroot...'
+    assert key_of_flag('-O1') == '-O...'
+    assert key_of_flag('-fno-omit-frame-pointer') == '-fomit-frame-pointer'
+    assert key_of_flag('-Wall') == '-Wall'
+    assert key_of_flag('-Wno-error=unused-result') == '-Wunused-result'
+
+
 def test_collect_flags_by_keys():
 
     FLAGS = [
@@ -540,6 +550,24 @@ def test_check_consistency_of_collected():
     assert res.contra_keys == CONTRA_KEYS
     assert res.duplicates == ['-Werror', '-I/p/t/i', '--sysroot...']
     assert not res.maybe_ineffective_flags
+
+
+def test_filter_consistency_for_flags():
+
+    BY_KEYS = collect_flags_by_keys(['-O1', '-O2', '-O2', '-g', '-g', '-Werror', '-Wall',
+                                    '-Wno-all', '-fsanitize', '-Wunused', '-Warray'])
+
+    CONS = ConsistencyResult(duplicates=['-g...', '-O...'],
+                             contra_keys=['-Werror', '-Wall', '-fsanitize'],
+                             maybe_ineffective_flags=['-Wunused', '-Warray'])
+
+    res = filter_consistency_for_flags(CONS,
+                                       to_check=['-O2', '-Wno-all', '-Warray', '!-Werror'],
+                                       flags_by_keys=BY_KEYS)
+
+    assert res.duplicates == ['-O...']
+    assert res.contra_keys == ['-Wall']
+    assert res.maybe_ineffective_flags == ['-Warray']
 
 
 def test_check_consistency():
@@ -920,6 +948,110 @@ def test_check_entry():
 
     assert check_entry(TEST_ENTRY_2, cfg=Config(flags=['A1'])) == ResultsByEntry()
     assert check_entry(TEST_ENTRY_2, cfg=Config(flags=['A1', 'A3'])) == ResultsByEntry(missing=['A3'])
+
+
+def test_add_to_result():
+
+    STAT_INIT = 2
+
+    res: CheckResult = {}
+    stats: CheckStats = {
+        ConsistencyLevel.NONE: STAT_INIT,
+        ConsistencyLevel.CONTRADICTING: STAT_INIT,
+        ConsistencyLevel.INEFFECTIVE: STAT_INIT,
+        ConsistencyLevel.ALL: STAT_INIT,
+    }
+
+    RES_OF_ENTRY = ResultsByEntry(missing=['a'],
+                                  contra=['b', 'c'],
+                                  duplicates=['b', 'x', 'y'],
+                                  maybe_ineffective_flags=['z'])
+
+    add_to_result(res=res,
+                  stats=stats,
+                  entry=TEST_ENTRY,   # anything, used for logging only
+                  by_entry=RES_OF_ENTRY)
+
+    def in_res(v: str) -> bool:
+        return any(f"'{v}'" in k for k in res)
+
+    assert in_res('a')
+    assert in_res('b')
+    assert in_res('c')
+    assert in_res('x')
+    assert in_res('y')
+    assert in_res('z')
+
+    assert stats[ConsistencyLevel.NONE] == len(RES_OF_ENTRY.missing) + STAT_INIT
+    assert stats[ConsistencyLevel.CONTRADICTING] == len(RES_OF_ENTRY.contra) + STAT_INIT
+    assert stats[ConsistencyLevel.INEFFECTIVE] == len(RES_OF_ENTRY.maybe_ineffective_flags) + STAT_INIT
+    assert stats[ConsistencyLevel.ALL] == len(RES_OF_ENTRY.duplicates) + STAT_INIT
+
+    prev_res = deepcopy(res)
+    prev_stats = deepcopy(stats)
+
+    add_to_result(res=res,
+                  stats=stats,
+                  entry=TEST_ENTRY,   # anything, used for logging only
+                  by_entry=ResultsByEntry())
+
+    assert res == prev_res
+    assert stats == prev_stats
+
+
+def test_has_to_fail():
+
+    S0: CheckStats = {
+        ConsistencyLevel.NONE: 0,
+        ConsistencyLevel.CONTRADICTING: 0,
+        ConsistencyLevel.INEFFECTIVE: 0,
+        ConsistencyLevel.ALL: 0,
+    }
+
+    assert not has_to_fail(S0, ConsistencyLevel.NONE)
+    assert not has_to_fail(S0, ConsistencyLevel.ALL)
+
+    S1: CheckStats = {
+        ConsistencyLevel.NONE: 1,
+        ConsistencyLevel.CONTRADICTING: 0,
+        ConsistencyLevel.INEFFECTIVE: 0,
+        ConsistencyLevel.ALL: 0,
+    }
+
+    assert has_to_fail(S1, ConsistencyLevel.NONE)
+    assert has_to_fail(S1, ConsistencyLevel.ALL)
+
+    S2: CheckStats = {
+        ConsistencyLevel.NONE: 0,
+        ConsistencyLevel.CONTRADICTING: 1,
+        ConsistencyLevel.INEFFECTIVE: 0,
+        ConsistencyLevel.ALL: 0,
+    }
+
+    assert not has_to_fail(S2, ConsistencyLevel.NONE)
+    assert has_to_fail(S2, ConsistencyLevel.CONTRADICTING)
+    assert has_to_fail(S2, ConsistencyLevel.ALL)
+
+    S3: CheckStats = {
+        ConsistencyLevel.NONE: 0,
+        ConsistencyLevel.CONTRADICTING: 0,
+        ConsistencyLevel.INEFFECTIVE: 1,
+        ConsistencyLevel.ALL: 0,
+    }
+
+    assert not has_to_fail(S3, ConsistencyLevel.CONTRADICTING)
+    assert has_to_fail(S3, ConsistencyLevel.INEFFECTIVE)
+    assert has_to_fail(S3, ConsistencyLevel.ALL)
+
+    S4: CheckStats = {
+        ConsistencyLevel.NONE: 0,
+        ConsistencyLevel.CONTRADICTING: 0,
+        ConsistencyLevel.INEFFECTIVE: 0,
+        ConsistencyLevel.ALL: 1,
+    }
+
+    assert not has_to_fail(S4, ConsistencyLevel.INEFFECTIVE)
+    assert has_to_fail(S4, ConsistencyLevel.ALL)
 
 
 TEST_CDB = [TEST_ENTRY, TEST_ENTRY_2, TEST_ENTRY_3]

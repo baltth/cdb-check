@@ -6,11 +6,11 @@ Tool to verify C/C++ build configuration by checking the compile database.
 Usage: see `cdb_check.py -h` for details.
 """
 
-from dataclasses import dataclass, field, fields, asdict
+from dataclasses import dataclass, field, fields
 from enum import IntEnum
 from pathlib import PurePath, Path
 import pprint
-from typing import List, Dict, Set, Union, Tuple, Callable, Any
+from typing import List, Dict, Set, Union, Tuple, Callable, Optional, Any
 from shlex import split
 import argparse
 import copy
@@ -411,6 +411,16 @@ def match_switch_flag(flag: str) -> str:
     return make_enabler(f)
 
 
+def key_of_flag(f: str) -> str:
+    """
+    Get the represented logical option of a flag.
+    """
+    key = match_multi_flag(f)
+    if key:
+        return key
+    return match_switch_flag(f)
+
+
 def collect_flags_by_keys(flags: List[str]) -> Dict[str, List[str]]:
     """
     Collect flags by the logical option they represent.
@@ -418,9 +428,7 @@ def collect_flags_by_keys(flags: List[str]) -> Dict[str, List[str]]:
 
     res: Dict[str, List[str]] = {}
     for f in flags:
-        key = match_multi_flag(f)
-        if not key:
-            key = match_switch_flag(f)
+        key = key_of_flag(f)
         if key in res.keys():
             res[key].append(f)
         else:
@@ -589,13 +597,16 @@ def check_consistency_of_collected(flags_by_keys: Dict[str, List[str]], level: C
                              debug=debug)
 
 
-def check_consistency(flags: List[str], level: ConsistencyLevel) -> ConsistencyResult:
+def check_consistency(flags: List[str],
+                      level: ConsistencyLevel,
+                      to_check: Optional[List[str]] = None) -> ConsistencyResult:
     """
     Consistency check of a flag list.
 
     Args:
         flags: List of flags
         level: Switch to define the check features.
+        to_check: Filter results to flags, defaults to all
 
     Return:
         ConsistencyResult:
@@ -609,10 +620,34 @@ def check_consistency(flags: List[str], level: ConsistencyLevel) -> ConsistencyR
     if level >= ConsistencyLevel.INEFFECTIVE:
         res.maybe_ineffective_flags, dbg = get_maybe_ineffective_flags(flags)
         res.debug.update(dbg)
+
+    if to_check:
+        return filter_consistency_for_flags(orig=res, to_check=to_check, flags_by_keys=flags_by_keys)
     return res
 
 
-def check_flag(flag: str, flag_set: List[str]) -> bool:
+def filter_consistency_for_flags(orig: ConsistencyResult,
+                                 to_check: List[str],
+                                 flags_by_keys: Dict[str, List[str]]) -> ConsistencyResult:
+    """
+    Drop consistency check result for not expected flags.
+    """
+    to_check_wo_banned = [e for e in to_check if not e.startswith(FLAG_BANNED_PREFIX)]
+
+    def to_keep(k: str) -> bool:
+        checked = flags_by_keys.get(k, []) + [k]
+        return any(e for e in to_check_wo_banned if check_flag(e, checked))
+
+    def filt(flags: List[str]) -> List[str]:
+        return [f for f in flags if to_keep(f)]
+
+    return ConsistencyResult(duplicates=filt(orig.duplicates),
+                             contra_keys=filt(orig.contra_keys),
+                             maybe_ineffective_flags=filt(orig.maybe_ineffective_flags),
+                             debug=orig.debug)   # yes, debug is not filtered...
+
+
+def check_flag(expected: str, flag_set: List[str]) -> bool:
     """
     Check if a flag is present or not present in a flag set.
 
@@ -627,21 +662,21 @@ def check_flag(flag: str, flag_set: List[str]) -> bool:
     TODO:
         - support MSVC arguments
     """
-    if flag.startswith(FLAG_BANNED_PREFIX):
-        return not check_flag(flag.removeprefix(FLAG_BANNED_PREFIX), flag_set)
-    if flag.startswith(FLAG_REGEX_PREFIX):
-        normalized_flag = flag.removeprefix(FLAG_REGEX_PREFIX).replace(PATH_REPLACEMENT, PATH_REPLACEMENT_IN_REGEX)
+    if expected.startswith(FLAG_BANNED_PREFIX):
+        return not check_flag(expected.removeprefix(FLAG_BANNED_PREFIX), flag_set)
+    if expected.startswith(FLAG_REGEX_PREFIX):
+        normalized_flag = expected.removeprefix(FLAG_REGEX_PREFIX).replace(PATH_REPLACEMENT, PATH_REPLACEMENT_IN_REGEX)
         return any(re.search(normalized_flag, a) for a in flag_set)
-    if flag.startswith('-'):
-        return flag in flag_set
-    if f'-{flag}' in flag_set:
+    if expected.startswith('-'):
+        return expected in flag_set
+    if f'-{expected}' in flag_set:
         return True
-    if f'--{flag}' in flag_set:
+    if f'--{expected}' in flag_set:
         return True
     return False
 
 
-def check_flags(entry: CdbEntry, flags: List[str]) -> List[str]:
+def check_flags(entry: CdbEntry, expected_flags: List[str]) -> List[str]:
     """
     Check if a set of compile flags is present (or not) in a CdbEntry,
     additionally log errors to stderr.
@@ -654,7 +689,7 @@ def check_flags(entry: CdbEntry, flags: List[str]) -> List[str]:
     """
 
     res: Set[str] = set()
-    for f in flags:
+    for f in expected_flags:
         if not check_flag(f, entry.args):
             res.add(f)
     return list(res)
@@ -742,6 +777,8 @@ class Config:
     presets: Dict[str, List[str]] = field(default_factory=dict)
     layers: List[Layer] = field(default_factory=list)
     consistency: ConsistencyLevel = field(default=ConsistencyLevel.NONE)
+    consistency_on_expected: bool = False
+    fail_on_level: ConsistencyLevel = field(default=ConsistencyLevel.NONE)
     verbose: bool = False
     very_verbose: bool = False
     summary: bool = False
@@ -977,7 +1014,10 @@ def check_entry(entry: CdbEntry, cfg: Config, dump: bool = False) -> ResultsByEn
 
     logger.debug(f'Expecting {pprint.pformat(to_check) if to_check else "none"}')
 
-    consistency = check_consistency(entry.orig_args, cfg.consistency)
+    consistency = check_consistency(entry.orig_args,
+                                    cfg.consistency,
+                                    to_check=to_check if cfg.consistency_on_expected else None)
+
     debug = {}
     if consistency.debug:
         debug['consistency'] = consistency.debug
@@ -995,9 +1035,10 @@ def check_entry(entry: CdbEntry, cfg: Config, dump: bool = False) -> ResultsByEn
 
 
 CheckResult = Dict[str, Set[str]]
+CheckStats = Dict[ConsistencyLevel, int]
 
 
-def add_to_result(res: CheckResult, entry: CdbEntry, by_entry: ResultsByEntry):
+def add_to_result(res: CheckResult, stats: CheckStats, entry: CdbEntry, by_entry: ResultsByEntry):
     """
     Add the missing flag set of a CdbEntry to the aggregated result.
     """
@@ -1008,12 +1049,16 @@ def add_to_result(res: CheckResult, entry: CdbEntry, by_entry: ResultsByEntry):
 
     for f in by_entry.missing:
         add_one(missing_flag_text(f))
+        stats[ConsistencyLevel.NONE] += 1
     for f in by_entry.contra:
         add_one(contradicting_flag_text(f))
+        stats[ConsistencyLevel.CONTRADICTING] += 1
     for f in by_entry.maybe_ineffective_flags:
         add_one(ineffective_flag_text(f))
+        stats[ConsistencyLevel.INEFFECTIVE] += 1
     for f in by_entry.duplicates:
         add_one(duplicate_flag_text(f))
+        stats[ConsistencyLevel.ALL] += 1
 
 
 def summary_report(result: CheckResult):
@@ -1032,6 +1077,12 @@ def summary_report(result: CheckResult):
     for error, entries in result.items():
         logger.warning(f'{error}: {len(entries)} issue(s) in')
         logger.warning(file_list(entries))
+
+
+def has_to_fail(stats: CheckStats, fail_on_level: ConsistencyLevel) -> bool:
+
+    checked = [ConsistencyLevel(v) for v in range(ConsistencyLevel.NONE.value, fail_on_level.value + 1)]
+    return any(stats[l] > 0 for l in checked)
 
 
 def check_cdb(cdb: List[CdbEntry],
@@ -1074,17 +1125,23 @@ def check_cdb(cdb: List[CdbEntry],
         return False
 
     res: CheckResult = {}
+    stats: CheckStats = {
+        ConsistencyLevel.NONE: 0,
+        ConsistencyLevel.CONTRADICTING: 0,
+        ConsistencyLevel.INEFFECTIVE: 0,
+        ConsistencyLevel.ALL: 0,
+    }
 
     for e in cdb:
         res_by_entry = check_entry(e, cfg, dump=dump)
-        add_to_result(res, e, res_by_entry)
+        add_to_result(res=res, stats=stats, entry=e, by_entry=res_by_entry)
 
     if cfg.summary:
         logger.debug(LOG_SEPARATOR)
         logger.debug('Creating summary...')
         summary_report(res)
 
-    return not res
+    return not has_to_fail(stats, cfg.fail_on_level)
 
 
 def process(cdb_file: str,
@@ -1173,7 +1230,7 @@ def load_config(file: str) -> Dict:
     """
     Load config file to a dictionary.
     """
-    with open(file) as f:
+    with open(file, encoding='utf-8') as f:
 
         if file.endswith('.yaml') or file.endswith('.yml'):
             return load_yaml_config(f)
@@ -1194,15 +1251,9 @@ def arg_parser() -> argparse.ArgumentParser:
     parser.add_argument('input', help='Compile DB file (compile_commands.json)')
     parser.add_argument('-c', '--config', help='Config file (JSON/YAML)')
 
-    parser.add_argument('-f', '--flags', nargs='+', help='Flags to check, passed without \'-\' prefix')
-    parser.add_argument('-cc', '--consistency',
-                        type=lambda x: ConsistencyLevel(int(x)),
-                        choices=[e.value for e in ConsistencyLevel],
-                        default=ConsistencyLevel.CONTRADICTING,
-                        help=f'Consistency check level [default: {ConsistencyLevel.CONTRADICTING.value}]')
-
     in_opts = parser.add_argument_group('Input configuration')
 
+    in_opts.add_argument('-f', '--flags', nargs='+', help='Flags to check, passed without \'-\' prefix')
     in_opts.add_argument('-b', '--base-dirs', nargs='+',
                          help='Path prefixes to remove, either absolute or relative to $PWD')
     in_opts.add_argument('-u', '--compile-units', nargs='+', help='Compile units to check, default: all')
@@ -1210,6 +1261,21 @@ def arg_parser() -> argparse.ArgumentParser:
                          '--libraries',
                          nargs='+',
                          help='Logical \'libraries\' to check, default: all')
+
+    chk_opts = parser.add_argument_group('Check options')
+
+    chk_opts.add_argument('-cc', '--consistency',
+                          type=lambda x: ConsistencyLevel(int(x)),
+                          choices=[e.value for e in ConsistencyLevel],
+                          default=ConsistencyLevel.CONTRADICTING,
+                          help=f'Consistency check level [default: {ConsistencyLevel.CONTRADICTING.value}]')
+    chk_opts.add_argument('-ce', '--consistency-on-expected', action='store_true',
+                          help='Report consistency check warnings only for the expected flags')
+    chk_opts.add_argument('-fl', '--fail-on-level',
+                          type=lambda x: ConsistencyLevel(int(x)),
+                          choices=[e.value for e in ConsistencyLevel],
+                          default=ConsistencyLevel.NONE,
+                          help='Fail (i.e. return non-zero code) on consistency issue level [default: fail only on missing flags]')
 
     out_opts = parser.add_argument_group('Output configuration')
 

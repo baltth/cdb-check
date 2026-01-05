@@ -42,6 +42,20 @@
       ],
       "default": 0
     },
+    "consistency_on_expected": {
+      "type": "boolean",
+      "default": false
+    },
+    "fail_on_level": {
+      "type": "integer",
+      "enum": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "default": 0
+    },
     "verbose": {
       "type": "boolean",
       "default": false

@@ -76,9 +76,20 @@ echo "---"
 
 echo "---"
 echo "Consistency checks ..."
+echo "---"
+./cdb_check.py -c test_data/cfg_unused.json test_data/cdb_inconsistent.json --consistency 3 -vv
+
+echo "---"
+echo "Checks only for expected flags"
+echo "---"
+./cdb_check.py -c test_data/cfg_unused.json test_data/cdb_inconsistent.json --consistency 3 -ce
+
+echo "---"
+echo "Fail on consistency issues"
+echo "---"
 echo "(expected to fail)"
 echo "---"
-! ./cdb_check.py -c test_data/cfg_unused.json test_data/cdb_inconsistent.json --consistency 3 -vv
+! ./cdb_check.py -c test_data/cfg_unused.json test_data/cdb_inconsistent.json --consistency 3 -fl 2
 
 echo "---"
 popd
