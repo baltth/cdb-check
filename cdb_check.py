@@ -1069,9 +1069,11 @@ def summary_report(result: CheckResult):
         assert files
         INDENT = ' ' * 2
         LIMIT = 5
-        files_as_string = '\n'.join([INDENT + f for f in list(files)[0:LIMIT]])
-        if len(files) > LIMIT:
-            files_as_string += f'\n{INDENT}... and {(len(files) - LIMIT)} more'
+        files_sorted = list(files)
+        files_sorted.sort()
+        files_as_string = '\n'.join([INDENT + f for f in files_sorted[0:LIMIT]])
+        if len(files_sorted) > LIMIT:
+            files_as_string += f'\n{INDENT}... and {(len(files_sorted) - LIMIT)} more'
         return files_as_string
 
     for error, entries in result.items():
