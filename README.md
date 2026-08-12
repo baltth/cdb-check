@@ -399,10 +399,10 @@ Normal output:
 Summary:
 ```
 Missing flag '-g1': 6 issue(s) in
-  [...]/src/lib/file2.cpp
   [...]/src/file5_gen.cpp
+  [...]/src/file6.c
   [...]/src/lib/file1.cpp
-  [...]/src/lib/file4_gen.cpp
+  [...]/src/lib/file2.cpp
   [...]/src/lib/file3.cpp
   ... and 1 more
 Missing flag '-DLIB_DEFINE=1': 2 issue(s) in
@@ -411,6 +411,8 @@ Missing flag '-DLIB_DEFINE=1': 2 issue(s) in
 Missing flag '-Wno-format': 1 issue(s) in
   [...]/src/lib/file4_gen.cpp
 ```
+
+> Note that file lists are sorted in the summary.
 
 Use __verbose mode__ with `-v` option to get details about
 the effective configuration and matching results. This will produce
